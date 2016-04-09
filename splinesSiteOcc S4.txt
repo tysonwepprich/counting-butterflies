@@ -1,0 +1,49 @@
+
+    model { 
+    ### Define seasonal and annual patterns in detectability
+    for (m in 1:nyear) {  
+    for (i in 1:n) {
+    logit(p[m,i]) <- lp[m,i]
+    lp[m,i] <- mfe[m,i]+mre[m,i]
+    mfe[m,i] <- a[m]*X[i,1]+b[m]*X[i,2]+c[m]*X[i,3]
+    mre[m,i]<-sum(n.mre[m,i,1:nknots])
+    for (k in 1:nknots) {
+    n.mre[m,i,k]<-b.k[m,k]*Z[i,k]
+    }
+    }
+    
+    ### Random regression coefficients corresponding to the truncated polynomial functions
+    for (k in 1:nknots) {
+    b.k[m,k] ~ dnorm(0,taub)
+    }
+    
+    ### Fixed regression coefficients corresponding to the 'plus' functions
+    
+    a[m] ~ dnorm(0,0.01)
+    b[m] ~ dnorm(0,0.01)
+    c[m] ~ dnorm(0,0.01)
+    }
+    
+    ### precision for random regression coefficients corresponding to the truncated polynomial functions
+    taub~dgamma(1.0E-6,1.0E-6)      
+    
+    # Specify priors
+    for (k in 1:nyear) {
+    psi[k] ~ dunif(0, 1)
+    }
+    
+    # Ecological submodel: Define state conditional on parameters
+    for (i in 1:nsite){
+    for (k in 1:nyear){
+    z[i,k] ~ dbern(psi[k])
+    }
+    }
+    
+    # Observation model
+    for (i in 1:nobs){
+    muy[site[i],survey[i],year[i]] <- z[site[i],year[i]]*p[year[i],survey[i]]
+    y[i] ~ dbin(muy[site[i],survey[i],year[i]], nrep[i])
+    }
+    
+    }
+    
