@@ -1,0 +1,343 @@
+---
+title: "Validation of GAM + MM methods"
+author: "Tyson Wepprich"
+date: "October 9, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# packages to load
+library(mgcv)
+library(tidyverse)
+library(lubridate)
+library(mclust)
+library(mixsmsn)
+
+
+```
+
+Having developed new methods for modeling butterfly populations from citizen science Pollard transects for my dissertation, I need to verify that they work!
+
+Here's the approach:
+1. Simulate counts with varying species parameters.
+2. Fit with GAM for whole flight curve.
+3. Use mixture model for generation specific phenology/abundance.
+4. Use approach on Ohio butterfly data with additional covariates.
+
+Use Calabrese 2012 to simulate abundance curves based on Zonneveld 1991 model.
+```{r parametric_abundance_curves}
+
+sig <- 1 # shape parameter, left skew if > 1, right skew if <1
+mu <- 10 # location of peak emergence
+t <- seq(1, 30, 1) # timestep
+beta <- 1 # dispersion of emergence curve, scale parameter
+alpha <- .3 # death rate per time
+
+Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
+  
+  z <- exp((t - mu) / beta) / (1 + exp((t - mu) / beta))
+  a <- 1 + alpha * beta
+  b <- sig - alpha * beta
+  
+  # incomplete beta
+  ibeta <- function(z, a, b){ pbeta(z, a, b) * beta(a, b) }
+  
+  e <- (sig * (exp((t - mu)/beta)))/(beta * (1 + exp((t - mu)/beta)))^(sig + 1)
+  e <- e / sum(e)
+  y <- alpha * sig * exp(-alpha * (t - mu)) * ibeta(z, a, b)
+  y <- y / sum(y)
+  return(data.frame(t, y, e))
+}
+
+test <- Abund_Curve(t, alpha, beta, mu, sig)
+# gdd scale?
+test <- Abund_Curve(t = seq(0, 2000, 50), alpha = .01, beta = 40, mu = 1000, sig = 1)
+
+
+plt <- ggplot(test, aes(x = t, y = y)) + 
+  geom_point() +
+  geom_path(aes(y = e), color = "blue")
+plt
+
+
+
+
+
+
+```
+
+GDD across gradient
+```{r site_gdd_variation}
+sites <- read.csv("data/OHsites_reconciled_update2016.csv")
+sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
+sites$Name <- NULL
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
+
+# sitesumm <- gdd %>% 
+#   group_by(SiteID, year(SiteDate)) %>% 
+#   summarise(AvailGDD = sum(degday1030))
+
+gdd <- left_join(gdd, sites) %>% 
+  dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT) %>% 
+  mutate(Year = year(SiteDate),
+         DOY = yday(SiteDate)) %>% 
+  group_by(SiteID, Year) %>% 
+  arrange(DOY) %>% 
+  mutate(AccumDD = cumsum(degday530))
+
+```
+
+
+
+Simulation
+
+```{r simulate_butterfly_counts}
+# parameters
+nsite <- 25 # up to 140 OH sites
+nyear <- 10 # up to 35 years in Daymet data
+nsurv <- 30
+surv_missing <- .2 # remove surveys for each site, based on data distribution
+site_missing <- .2 # turnover across years
+
+ngen <- 3
+# volt_flex <- "Y"
+gen_ddreq <- 600
+peak_sd <- 10
+death_rate <- .6 # on weekly rate
+
+# site total population dispersion
+negbin_mu <- 100
+negbin_disp <- 1
+# detection probability parameters (logit scale)
+detprob_b0 <- -7 
+detprob_b1 <- .6
+detprob_b2 <- -.01
+
+# # nonlinear det prob
+# x <- seq(-5, 45, .1)
+# y <- plogis(-7 + x * .6 + -.01 * x^2)
+# plot(x, y)
+
+# subroutines
+
+# lat/lon of sites with variation in degree-days available on simple N/S gradient
+# randomly select sites and years to use their coordinates and historical gdd accumulation
+sites <- sample(x = unique(gdd$SiteID), size = nsite, replace = FALSE)
+years <- sample(x = unique(gdd$Year), size = nyear, replace = FALSE)
+dddat <- gdd %>% 
+  filter(SiteID %in% sites, Year %in% years) %>% 
+  filter(DOY %in% (seq(77, 308, 7) + sample.int(n=6, size=34, replace=TRUE)))
+
+# voltinism varying by site
+
+# simulate phenology for each generation and combine
+dflist <- list()
+for (g in 1:ngen){
+  df <- Abund_Curve(t = dddat$AccumDD/100, alpha = death_rate, 
+                                beta = g * peak_sd / 100, mu = g * gen_ddreq / 100, sig = 1)
+  df <- cbind(data.frame(dddat), df)
+  df$Gen <- g
+  dflist[[g]] <- df
+}
+dfall <- bind_rows(dflist) %>% 
+  arrange(SiteID, SiteDate)
+
+
+plt <- ggplot(dfall, aes(x = AccumDD, y = y, group = interaction(SiteID, Gen), color = Gen)) +
+  geom_line() +
+  facet_wrap(~Year)
+plt
+
+# dd <- dfall %>% dplyr::filter(SiteID %in% unique(.$SiteID)[seq(1, nsite, length.out = 5)])
+# plt <- ggplot(dd, aes(x = AccumDD, y = y, group = Year, color = Gen)) +
+#   geom_path() +
+#   facet_wrap(~SiteID)
+# plt
+# counting process
+counts <- dfall %>% 
+  group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT) %>% 
+  summarise(RelProp = sum(y * Gen),
+            DP = plogis(detprob_b0 + detprob_b1 * maxT[1] + detprob_b2 * maxT[1]^2)) %>% 
+  group_by(SiteID, Year) %>% 
+  mutate(RelProp = RelProp / sum(RelProp),
+         M = rnbinom(1, mu = negbin_mu, size = negbin_disp),
+         N = rpois(length(RelProp), lambda = RelProp * M),
+         Y = rbinom(length(N), size = N, prob = DP)) %>% 
+  data.frame()
+
+
+
+# mixture models for subset
+test_sy <- counts %>% filter(SiteID == "174", Year == unique(Year)[5])
+test_s <- counts %>% filter(SiteID == "003")
+test_y <- counts %>% filter(Year == unique(Year)[5])
+
+plt <- ggplot(test_sy, aes(x = AccumDD, y = Y, group = Year, color = SiteID)) +
+  geom_point() 
+plt
+
+
+# for now just output estimated mu
+CompareMixMods <- function(dat, mvmin, mvmax){
+  dd <- dat$AccumDD
+  y <- dat$Y
+  dd_dist <- rep(dd, y)
+  # for output of classification of each observation
+  # outdf <- data.frame(SiteID = rep(dat$SiteID, y), SiteDate = rep(dat$SiteDate, y))
+  out <- list()
+  
+  # NORMAL
+  # get initial vals from search for best num gen
+  mod_sk <- smsn.search(dd_dist, nu = 5, g.min = mvmin, g.max = mvmax, family = "Skew.normal", kmeans.param = list(n.start = 5))
+  
+  init.pii <- mod_sk$best.model$pii
+  init.pii[length(init.pii)] <- 1 - sum(init.pii[1:(length(init.pii) - 1)])
+  
+  # # giving starting values doesn't save much time?
+  # mod_final_sk <- smsn.mix(dd_dist, nu = mod_sk$best.model$nu, 
+  #                          mu = mod_sk$best.model$mu,
+  #                          sigma2 = mod_sk$best.model$sigma2, 
+  #                          shape = mod_sk$best.model$shape,
+  #                          pii = init.pii, g = length(mod_sk$best.model$mu), get.init = FALSE, group = TRUE, obs.prob = TRUE, family = "Skew.normal", calc.im = TRUE)
+  
+  mod_final_sk <- smsn.mix(dd_dist, nu = 5, g = length(mod_sk$best.model$mu), get.init = TRUE, family = "Skew.normal", calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+  
+  out[[1]] <- data.frame(model = "smsn_sknorm", G = 1:length(mod_final_sk$mu), mu = sort(mod_final_sk$mu), w = mod_final_sk$pii[rank(mod_final_sk$mu)])
+  
+  # Normal het from smsn
+  mod_norm <- smsn.search(dd_dist, nu = 5, g.min = mvmin, g.max = mvmax, family = "Normal", kmeans.param = list(n.start = 5))
+  
+  init.pii <- mod_norm$best.model$pii
+  init.pii[length(init.pii)] <- 1 - sum(init.pii[1:(length(init.pii) - 1)])
+  
+  mod_final_norm <- smsn.mix(dd_dist, nu = 5, g = length(mod_norm$best.model$mu), get.init = TRUE, family = "Normal", calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+  
+  out[[2]] <- data.frame(model = "smsn_norm", G = 1:length(mod_final_norm$mu), mu = sort(mod_final_norm$mu), w = mod_final_norm$pii[rank(mod_final_norm$mu)]) 
+  
+  # T DIST
+  # get initial vals from search for best num gen
+  mod_skt <- smsn.search(dd_dist, nu = 5, g.min = mvmin, g.max = mvmax, family = "Skew.t", kmeans.param = list(n.start = 5))
+  
+  init.pii <- mod_skt$best.model$pii
+  init.pii[length(init.pii)] <- 1 - sum(init.pii[1:(length(init.pii) - 1)])
+  
+  mod_final_skt <- smsn.mix(dd_dist, nu = 5, g = length(mod_skt$best.model$mu), get.init = TRUE, family = "Skew.t", calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+  out[[3]] <- data.frame(model = "smsn_skt", G = 1:length(mod_final_skt$mu), mu = sort(mod_final_skt$mu), w = mod_final_skt$pii[rank(mod_final_skt$mu)])
+  
+  # T het from smsn
+  mod_t <- smsn.search(dd_dist, nu = 5, g.min = mvmin, g.max = mvmax, family = "t", kmeans.param = list(n.start = 5))
+  
+  init.pii <- mod_t$best.model$pii
+  init.pii[length(init.pii)] <- 1 - sum(init.pii[1:(length(init.pii) - 1)])
+  
+  mod_final_t <- smsn.mix(dd_dist, nu = 5, g = length(mod_t$best.model$mu), get.init = TRUE, family = "t", calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+  out[[4]] <- data.frame(model = "smsn_t", G = 1:length(mod_final_t$mu), mu = sort(mod_final_t$mu), w = mod_final_t$pii[rank(mod_final_t$mu)])
+  
+  
+  mod_mc_hom <- try(Mclust(dd_dist, G=c(mvmin:mvmax), modelNames = "E"), silent = TRUE)
+  mod_mc_het <- try(Mclust(dd_dist, G=c(mvmin:mvmax), modelNames = "V"), silent = TRUE)
+  
+  out[[5]] <- data.frame(model = "mc_hom", G = 1:length(mod_mc_hom$parameters$pro), mu = sort(mod_mc_hom$parameters$mean), w = mod_mc_hom$parameters$pro[rank(mod_mc_hom$parameters$mean)])
+  out[[6]] <- data.frame(model = "mc_het", G = 1:length(mod_mc_het$parameters$pro), mu = sort(mod_mc_het$parameters$mean), w = mod_mc_het$parameters$pro[rank(mod_mc_het$parameters$mean)])
+  # get results
+  result <- bind_rows(out)
+  return(result)
+}
+
+a <- CompareMixMods(test_y, 2, 4)
+
+test <- counts %>% 
+  group_by(Year) %>% 
+  do(CompareMixMods(., mvmin = 2, mvmax = 4))
+
+test1 <- CompareMixMods(counts, 2, 4)
+test1b <- CompareMixMods(counts, 2, 3)
+test1c <- CompareMixMods(counts, 2, 4)
+test1d <- CompareMixMods(counts, 2, 3)
+
+# issues with above:
+# model selection keeps choosing 4 generations, instead of true 3
+# often with lots of overlap between 2 modes for last generation
+# sometimes will run same skew t model and get different best results
+# haven't tried more sites yet
+# haven't rigorously tested site x year vs year vs all grouping and disaggregation
+
+test2 <- test %>% 
+  group_by(model, G) %>% 
+  summarise(meanmu = mean(mu),
+            meanw = mean(w))
+
+
+counts$SiteID <- as.factor(counts$SiteID)
+
+modnb <- gam(Y ~ 
+                         # s(zlistlength)+
+                         s(maxT)+
+                         # s(zduration)+
+                         # s(SiteYear, cumdegday, bs = "fs", k = 5, m = 1) +
+                          s(AccumDD, bs = "cc", k = 20) +
+                         # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(5, 20), d = c(2, 1)) +
+                         s(SiteID, bs = "re"),
+                         # s(Ordinal, bs = "cc", k = 10),
+                       family = nb(theta = NULL, link = "log"),
+                       # family = poisson(link = "log"),
+                       data = counts,
+                       method = "REML", 
+                       optimizer = c("outer", "newton"), 
+                       # gamma = 1.4, 
+                       control = list(maxit = 500))
+
+  counts$Y <- predict(modnb, newdata = counts, type = "response")
+
+library(MASS)  
+  Xp <- predict.gam(object = modnb, newdata = counts, type="lpmatrix") ## map coefs to fitted curves
+  beta <- coef(modnb)
+  Vb   <- vcov(modnb) ## posterior mean and cov of coefs
+  n <- 1 # choose number of simulations
+  # set.seed(10)
+  mrand <- mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+  ilink <- family(modnb)$linkinv
+  # linklppreds <- Xp %*% t(mrand)
+    linklppreds <- Xp %*% mrand
+  nbpreds <- apply(X = linklppreds, 
+                   MARGIN = 1, 
+                   FUN = function(x){
+                     temp <- sort(x)
+                     bounds <- quantile(1:n, probs = c(0.025, 0.975))
+                     x <- temp[bounds[1]:bounds[2]]
+                     x <- ilink(x)
+                     x <- rnbinom(n = length(x),
+                                  mu = x,
+                                  size = modnb$family$getTheta(TRUE))
+                     return(x)
+                   })
+  
+    counts$Y <- x
+
+    
+    test1c <- CompareMixMods(counts, 2, 3)
+
+```
+
+What's the test worth publishing?
+Simulation to compare performance of normal vs skewed mixture models.
+Data degradation to see how sites/years should be grouped to keep model estimates of generation size/phenology accurate. Whether GAM is needed to smooth before mixture models.
+1. Simulate statewide population over years.
+  - Lifespan and emergence spread determining skew and overlap.
+  - Beginning and end of season curves. Eventually add frost boundaries.
+  - Voltinism and GDD requirements.
+  - Varying population size by generation.
+  - Dispersion of negative binomial in survey counts (or poisson).
+  - Detection probability with single covariate.
+2. Different % of data removed. Even or good/bad sites.
+3. Cluster raw data into generations, by single site/year, by site, by year, all.
+4. GAM by single site/year, by site, by year, all. Then cluster predictions with model uncertainty included.
+5. Compare actual/estimated N, mu, sd of each generation.
+6. Discuss physiological vs ordinal time scales? End of year problems.
+
+
+
+
+
