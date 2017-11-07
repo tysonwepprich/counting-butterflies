@@ -116,9 +116,9 @@ detprob_b1 <- .6
 detprob_b2 <- -.01
 
 # # nonlinear det prob
-# x <- seq(-5, 45, .1)
-# y <- plogis(-7 + x * .6 + -.01 * x^2)
-# plot(x, y)
+x <- seq(-5, 45, .1)
+y <- plogis(-7 + x * .6 + -.01 * x^2)
+plot(x, y)
 
 # subroutines
 
@@ -152,7 +152,7 @@ plt
 
 # dd <- dfall %>% dplyr::filter(SiteID %in% unique(.$SiteID)[seq(1, nsite, length.out = 5)])
 # plt <- ggplot(dd, aes(x = AccumDD, y = y, group = Year, color = Gen)) +
-#   geom_path() +
+#   geom_line() +
 #   facet_wrap(~SiteID)
 # plt
 # counting process
@@ -167,7 +167,10 @@ counts <- dfall %>%
          Y = rbinom(length(N), size = N, prob = DP)) %>% 
   data.frame()
 
-
+# plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = SiteID)) +
+#   geom_point() +
+#   facet_wrap(~Year)
+# plt
 
 # mixture models for subset
 test_sy <- counts %>% filter(SiteID == "174", Year == unique(Year)[5])
@@ -339,5 +342,109 @@ Data degradation to see how sites/years should be grouped to keep model estimate
 
 
 
+
+
+```{r params}
+# parameters
+nsite <- c(10, 25, 50, 100) # up to 140 OH sites
+nyear <- c(5, 10, 20) # up to 35 years in Daymet data
+nsurv <- 30
+surv_missing <- c(0, .25, .5) # remove surveys for each site, based on data distribution
+# site_missing <- .2 # turnover across years
+
+ngen <- c(1:4)
+gen_size <- c("equal", "inc", "dec")
+# volt_flex <- "Y"
+# gen_ddreq <- 600 # depends on ngen
+peak_sd <- c(10, 30) # low and high overlap?
+death_rate <- c(.6, .8) # on weekly rate
+
+# site total population dispersion
+negbin_mu <- 100
+negbin_disp <- 1
+# detection probability parameters (logit scale)
+detprob_b0 <- c(-10, -7) 
+detprob_b1 <- .6
+detprob_b2 <- -.01
+
+# # nonlinear det prob
+# x <- seq(-5, 45, .1)
+# y <- plogis(-7 + x * .6 + -.01 * x^2)
+# plot(x, y)
+
+params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2)
+params <- expand.grid(params)
+
+```
+
+For each row of parameters, simulate true values and counts.
+
+```{r simulate}
+Simulate_Counts <- function(data, gdd){
+  set.seed(111) # use for all rows?
+  # randomly select sites and years to use their coordinates and historical gdd accumulation
+  sites <- sample(x = unique(gdd$SiteID), size = data$nsite, replace = FALSE)
+  years <- sample(x = unique(gdd$Year), size = data$nyear, replace = FALSE)
+  dddat <- gdd %>% 
+    filter(SiteID %in% sites, Year %in% years) %>% 
+    filter(DOY %in% (seq(90, 293, 7) + sample.int(n=6, size=30, replace=TRUE))) %>% 
+    sample_frac(size = 1 - data$surv_missing)
+  
+  # voltinism varying by site
+  if(data$ngen == 1){
+    gen_ddreq <- 800
+    gen_relsize = 1
+    gen_relsprd = 1
+  }else{
+    gen_ddreq <- seq(600, 1600, length.out = ngen)
+    gen_relsize <- switch(data$gen_size, 
+                          "equal" = rep(1, ngen),
+                          "inc" = seq(1, 2, length.out = ngen),
+                          "dec" = seq(2, 1, length.out = ngen))
+    gen_relsprd <- seq(1, 2, length.out = ngen)
+  }
+  # simulate phenology for each generation and combine
+  dflist <- list()
+  for (g in 1:data$ngen){
+    df <- Abund_Curve(t = dddat$AccumDD/100, alpha = data$death_rate, 
+                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+    df <- cbind(data.frame(dddat), df)
+    df$Gen <- g
+    dflist[[g]] <- df
+  }
+  dfall <- bind_rows(dflist) %>% 
+    arrange(SiteID, SiteDate)
+  
+  # counting process
+  counts <- dfall %>% 
+    group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT) %>% 
+    summarise(RelProp = sum(y * gen_relsize[Gen]),
+              DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
+    group_by(SiteID, Year) %>% 
+    mutate(RelProp = RelProp / sum(RelProp),
+           M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
+           N = rpois(length(RelProp), lambda = RelProp * M),
+           Y = rbinom(length(N), size = N, prob = DP)) %>% 
+    data.frame()
+  return(counts)
+}
+
+
+test <- Simulate_Counts(params[1,])
+
+# this works, might want to use do instead of map for parallel dplyr processing
+test2 <- params[1:5,] %>% 
+  mutate(sim = row_number()) %>%
+  group_by(sim) %>%
+  # nest() %>%
+  # mutate(counts = purrr::map(data, ~Simulate_Counts(data = ., gdd = gdd)))
+  do(counts = Simulate_Counts(data = ., gdd = gdd))
+
+
+test3 <- test2 %>% 
+  do(mixes = CompareMixMods(dat = .$counts, mvmin = 1, mvmax = 2))
+
+test3 <- CompareMixMods(dat = test2$counts[[1]], mvmin = 1, mvmax = 3)
+```
 
 
