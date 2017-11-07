@@ -10,11 +10,15 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # packages to load
 library(mgcv)
-library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
 library(lubridate)
 library(mclust)
 library(mixsmsn)
-
+# devtools::install_github("hadley/multidplyr")
+library(multidplyr)
 
 ```
 
@@ -73,7 +77,9 @@ GDD across gradient
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+
 
 # sitesumm <- gdd %>% 
 #   group_by(SiteID, year(SiteDate)) %>% 
@@ -430,21 +436,97 @@ Simulate_Counts <- function(data, gdd){
 }
 
 
-test <- Simulate_Counts(params[1,])
+# test <- Simulate_Counts(params[1,])
 
-# this works, might want to use do instead of map for parallel dplyr processing
-test2 <- params[1:5,] %>% 
-  mutate(sim = row_number()) %>%
-  group_by(sim) %>%
-  # nest() %>%
-  # mutate(counts = purrr::map(data, ~Simulate_Counts(data = ., gdd = gdd)))
-  do(counts = Simulate_Counts(data = ., gdd = gdd))
+# # this works, might want to use do instead of map for parallel dplyr processing
+# data <- params[1:5,] %>% 
+#   mutate(sim = row_number()) %>%
+#   group_by(sim) %>%
+#   # nest() %>%
+#   # mutate(counts = purrr::map(data, ~Simulate_Counts(data = ., gdd = gdd)))
+#   do(counts = Simulate_Counts(data = ., gdd = gdd))
+
+# 
+# test3 <- test2 %>% 
+#   do(mixes = CompareMixMods(dat = .$counts, mvmin = 1, mvmax = 2))
+# 
+# test3 <- CompareMixMods(dat = test2$counts[[1]], mvmin = 1, mvmax = 3)
+
+# try parallel
+cl <- 4
+group <- rep(1:cl, length.out = nrow(params))
+params <- bind_cols(tibble(group), params)
+
+cluster <- create_cluster(cores = cl)
+by_group <- params[1:4, ] %>%
+    partition(group, cluster = cluster)
+by_group
+
+mvmin <- 1
+mvmax <- 2
+
+# Utilize pipe (%>%) to assign libraries, functions, and values to clusters
+by_group %>%
+    # Assign libraries
+    cluster_library("dplyr") %>%
+    cluster_library("tidyr") %>%
+    cluster_library("purrr") %>%
+    cluster_library("mclust") %>%
+    cluster_library("mixsmsn") %>%
+    # Assign values (use this to load functions or data to each core)
+    cluster_assign_value("gdd", gdd) %>%
+    cluster_assign_value("Simulate_Counts", Simulate_Counts) %>%
+    cluster_assign_value("CompareMixMods", CompareMixMods) %>% 
+      cluster_assign_value("Abund_Curve", Abund_Curve) %>% 
+    cluster_assign_value("mvmin", mvmin) %>% 
+    cluster_assign_value("mvmax", mvmax)
 
 
-test3 <- test2 %>% 
-  do(mixes = CompareMixMods(dat = .$counts, mvmin = 1, mvmax = 2))
 
-test3 <- CompareMixMods(dat = test2$counts[[1]], mvmin = 1, mvmax = 3)
+start <- proc.time() # Start clock
+data_par <- by_group %>% # Use by_group party_df
+    do(counts = Simulate_Counts(data = ., gdd = gdd)) %>% 
+    # mutate(counts = purrr::map(data, ~Simulate_Counts(data = ., gdd = gdd))) %>%
+    # mutate(ests = purrr::map(counts, ~CompareMixMods(dat = ., 
+                                                     # mvmin = mvmin, mvmax = mvmax))) %>% 
+    collect() %>% # Special collect() function to recombine partitions
+    as_tibble()   # Convert to tibble
+time_elapsed_parallel <- proc.time() - start # End clock
+
+by_group <- data_par %>%
+    partition(group, cluster = cluster)
+by_group
+
+mvmin <- 1
+mvmax <- 2
+
+# Utilize pipe (%>%) to assign libraries, functions, and values to clusters
+by_group %>%
+    # Assign libraries
+    cluster_library("dplyr") %>%
+    cluster_library("tidyr") %>%
+    cluster_library("purrr") %>%
+    cluster_library("mclust") %>%
+    cluster_library("mixsmsn") %>%
+    # Assign values (use this to load functions or data to each core)
+    cluster_assign_value("gdd", gdd) %>%
+    cluster_assign_value("Simulate_Counts", Simulate_Counts) %>%
+    cluster_assign_value("CompareMixMods", CompareMixMods) %>% 
+      cluster_assign_value("Abund_Curve", Abund_Curve) %>% 
+    cluster_assign_value("mvmin", mvmin) %>% 
+    cluster_assign_value("mvmax", mvmax)
+
+
+
+data_par2 <- data_par %>% 
+  group_by(group) %>% 
+    do(ests = CompareMixMods(dat = .$counts, mvmin = 1, mvmax = 2)) %>% 
+    collect() %>% 
+    as_tibble()
+
+test <- CompareMixMods(dat = data_par$counts[[1]], mvmin, mvmax)
+test2 <- CompareMixMods(dat = data_par$counts[[4]], mvmin, mvmax)
+
 ```
 
 
