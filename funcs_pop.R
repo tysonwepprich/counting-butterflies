@@ -1,0 +1,191 @@
+# Functions for population estimation
+
+# Uses generalized Zonneveld model from Calabrese to model emergence and total abundance of one generation
+Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
+  
+  z <- exp((t - mu) / beta) / (1 + exp((t - mu) / beta))
+  a <- 1 + alpha * beta
+  b <- sig - alpha * beta
+  
+  # incomplete beta
+  ibeta <- function(z, a, b){ pbeta(z, a, b) * beta(a, b) }
+  
+  e <- (sig * (exp((t - mu)/beta)))/(beta * (1 + exp((t - mu)/beta)))^(sig + 1)
+  e <- e / sum(e)
+  y <- alpha * sig * exp(-alpha * (t - mu)) * ibeta(z, a, b)
+  y <- y / sum(y)
+  return(data.frame(t, y, e))
+}
+
+# Summary function for a generation's count distribution
+# To compare mixture model results when skewed
+Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
+  cdf <- cumsum(y) / sum(y)
+  cmean <- weighted.mean(t, y)
+  cmax <- t[which(y == max(y))]
+  
+  cquant <- rep(NA, length(quants))
+  for (i in seq_along(quants)){
+  cquant[i] <- t[which(abs(cdf - quants[i]) == min(abs(cdf - quants[i])))]
+  }
+  
+  df <- matrix(data = c(cmean, cmax, cquant), nrow = 1)
+  df <- data.frame(df)
+  names(df) <- c("curve_mean", "curve_max", paste0("curve_q", quants))
+  return(df)
+}
+
+# data argument is row of parameters
+# this assumes all sites/years have common physiology
+Simulate_Truth <- function(data){
+  set.seed(111) # use for all rows?
+  
+  # voltinism varying by site
+  if(data$ngen == 1){
+    gen_ddreq <- 800
+    gen_relsize = 1
+    gen_relsprd = 1
+  }else{
+    ngen <- data$ngen
+    gen_ddreq <- seq(600, 1600, length.out = ngen)
+    gen_relsize <- switch(data$gen_size, 
+                          "equal" = rep(1, ngen),
+                          "inc" = seq(1, 2, length.out = ngen),
+                          "dec" = seq(2, 1, length.out = ngen))
+    gen_relsprd <- seq(1, 2, length.out = ngen)
+  }
+  # simulate phenology for each generation and combine
+  dflist <- list()
+  for (g in 1:data$ngen){
+    df <- Abund_Curve(t = seq(0, 3000, 1)/100, alpha = data$death_rate, 
+                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+    df$Gen <- g
+    dflist[[g]] <- df
+  }
+  dfall <- bind_rows(dflist)
+  return(dfall)
+}
+
+
+# data argument is row of parameters
+Simulate_Counts <- function(data, gdd){
+  set.seed(111) # use for all rows?
+  # randomly select sites and years to use their coordinates and historical gdd accumulation
+  sites <- sample(x = unique(gdd$SiteID), size = data$nsite, replace = FALSE)
+  years <- sample(x = unique(gdd$Year), size = data$nyear, replace = FALSE)
+  dddat <- gdd %>% 
+    filter(SiteID %in% sites, Year %in% years) %>% 
+    filter(DOY %in% (seq(90, 293, 7) + sample.int(n=6, size=30, replace=TRUE))) %>% 
+    sample_frac(size = 1 - data$surv_missing)
+  
+  # voltinism varying by site
+  if(data$ngen == 1){
+    gen_ddreq <- 800
+    gen_relsize = 1
+    gen_relsprd = 1
+  }else{
+    ngen <- data$ngen
+    gen_ddreq <- seq(600, 1600, length.out = ngen)
+    gen_relsize <- switch(data$gen_size, 
+                          "equal" = rep(1, ngen),
+                          "inc" = seq(1, 2, length.out = ngen),
+                          "dec" = seq(2, 1, length.out = ngen))
+    gen_relsprd <- seq(1, 2, length.out = ngen)
+  }
+  # simulate phenology for each generation and combine
+  dflist <- list()
+  for (g in 1:data$ngen){
+    df <- Abund_Curve(t = dddat$AccumDD/100, alpha = data$death_rate, 
+                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+    df <- cbind(data.frame(dddat), df)
+    df$Gen <- g
+    dflist[[g]] <- df
+  }
+  dfall <- bind_rows(dflist) %>% 
+    arrange(SiteID, SiteDate)
+  
+  # counting process
+  counts <- dfall %>% 
+    group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT) %>% 
+    summarise(RelProp = sum(y * gen_relsize[Gen]),
+              DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
+    group_by(SiteID, Year) %>% 
+    mutate(RelProp = RelProp / sum(RelProp),
+           M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
+           N = rpois(length(RelProp), lambda = RelProp * M),
+           Y = rbinom(length(N), size = N, prob = DP)) %>% 
+    data.frame()
+  return(counts)
+}
+
+
+
+
+
+# fit different mixture models, output a list of model results
+# 
+CompareMixMods <- function(dat, mvmin, mvmax){
+  dd <- dat$AccumDD
+  y <- dat$Y
+  dd_dist <- rep(dd, y)
+  
+  out <- as.list(mvmin:mvmax)
+  names(out) <- paste0("gen", c(mvmin:mvmax))
+  for (i in seq_along(out)){
+    
+    safe_mix <- safely(smsn.mix)
+    # skew normal
+    out[[i]]$sknorm <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Skew.normal", 
+                                calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+    
+    # Normal het from smsn
+    out[[i]]$norm <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Normal", 
+                              calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+    
+    
+    
+    # T DIST
+    # get initial vals from search for best num gen
+    out[[i]]$skt <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Skew.t", 
+                             calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+    
+    # T het from smsn
+    out[[i]]$t <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "t", 
+                           calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
+    
+    # mclust
+    safe_mclust <- safely(Mclust)
+    out[[i]]$mc_hom <- safe_mclust(dd_dist, G=g, modelNames = "E")
+    out[[i]]$mc_het <- safe_mclust(dd_dist, G=g, modelNames = "V")
+    
+  }
+  return(out)
+}
+
+
+# take mixture model probability for each observation's class,
+# then assign generations to each count (possibly splitting them)
+Assign_generation <- function(){
+  
+  
+}
+
+# Extract results from mixture model objects
+Summ_mixmod <- function(mod){
+  if(is.null(mod$error)){
+    modtype <- attr(mod$result, "class")
+    if(modtype == "Mclust"){
+      # mclust
+    }else{
+      # mixsmsn
+    }
+  }else{
+    # error statement
+  }
+  
+  # make data.frame for output values
+  
+  
+}
+
+

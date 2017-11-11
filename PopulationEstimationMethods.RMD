@@ -255,7 +255,7 @@ CompareMixMods <- function(dat, mvmin, mvmax){
   return(result)
 }
 
-a <- CompareMixMods(test_y, 2, 4)
+a <- CompareMixMods(test$y, 1, 2)
 
 test <- counts %>% 
   group_by(Year) %>% 
@@ -352,11 +352,13 @@ Data degradation to see how sites/years should be grouped to keep model estimate
 
 ```{r params}
 # parameters
-nsite <- c(10, 25, 50, 100) # up to 140 OH sites
-nyear <- c(5, 10, 20) # up to 35 years in Daymet data
+nsite <- c(2, 4, 8, 16, 32, 64) # up to 140 OH sites
+nyear <- c(2, 4, 8, 16) # up to 35 years in Daymet data
 nsurv <- 30
 surv_missing <- c(0, .25, .5) # remove surveys for each site, based on data distribution
 # site_missing <- .2 # turnover across years
+group_struct <- c("all", "site", "year", "siteyear")
+gam_smooth <- c("yes", "no")
 
 ngen <- c(1:4)
 gen_size <- c("equal", "inc", "dec")
@@ -378,14 +380,69 @@ detprob_b2 <- -.01
 # y <- plogis(-7 + x * .6 + -.01 * x^2)
 # plot(x, y)
 
-params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2)
+params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, group_struct = group_struct, gam_smooth = gam_smooth, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2)
 params <- expand.grid(params)
 
 ```
 
+What should be measured for simulated curves? To be compared with mixmod results later.
+
+```{r metrics}
+data <- params[901, ]
+df <- Abund_Curve(t = seq(1, 30, .1), alpha = data$death_rate, 
+                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+
+df$cdf <- cumsum(df$y) / sum(df$y)
+curve_mean <- weighted.mean(df$t, df$y)
+curve_med <- df$t[which(abs(df$cdf - .5) == min(abs(df$cdf - .5)))]
+curve_max <- df$t[which(df$y == max(df$y))]
+
+dat <- Simulate_Truth(params[2261, ])
+grpdat <- dat %>% 
+  group_by(t) %>% 
+  summarise(ally = sum(y))
+
+pp <- ggplot(dat, aes(x = t, y = y)) + 
+  geom_point(aes(color = Gen)) +
+  geom_point(data = grpdat, aes(x = t, y = ally))
+pp
+```
+
+
+
 For each row of parameters, simulate true values and counts.
 
 ```{r simulate}
+Simulate_Truth <- function(data){
+  set.seed(111) # use for all rows?
+  
+  # voltinism varying by site
+  if(data$ngen == 1){
+    gen_ddreq <- 800
+    gen_relsize = 1
+    gen_relsprd = 1
+  }else{
+    ngen <- data$ngen
+    gen_ddreq <- seq(600, 1600, length.out = ngen)
+    gen_relsize <- switch(data$gen_size, 
+                          "equal" = rep(1, ngen),
+                          "inc" = seq(1, 2, length.out = ngen),
+                          "dec" = seq(2, 1, length.out = ngen))
+    gen_relsprd <- seq(1, 2, length.out = ngen)
+  }
+  # simulate phenology for each generation and combine
+  dflist <- list()
+  for (g in 1:data$ngen){
+    df <- Abund_Curve(t = seq(0, 3000, 1)/100, alpha = data$death_rate, 
+                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+    df$Gen <- g
+    dflist[[g]] <- df
+  }
+  dfall <- bind_rows(dflist)
+  return(dfall)
+}
+
+
 Simulate_Counts <- function(data, gdd){
   set.seed(111) # use for all rows?
   # randomly select sites and years to use their coordinates and historical gdd accumulation
@@ -402,6 +459,7 @@ Simulate_Counts <- function(data, gdd){
     gen_relsize = 1
     gen_relsprd = 1
   }else{
+    ngen <- data$ngen
     gen_ddreq <- seq(600, 1600, length.out = ngen)
     gen_relsize <- switch(data$gen_size, 
                           "equal" = rep(1, ngen),
@@ -436,6 +494,48 @@ Simulate_Counts <- function(data, gdd){
 }
 
 
+Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
+  
+  z <- exp((t - mu) / beta) / (1 + exp((t - mu) / beta))
+  a <- 1 + alpha * beta
+  b <- sig - alpha * beta
+  
+  # incomplete beta
+  ibeta <- function(z, a, b){ pbeta(z, a, b) * beta(a, b) }
+  
+  e <- (sig * (exp((t - mu)/beta)))/(beta * (1 + exp((t - mu)/beta)))^(sig + 1)
+  e <- e / sum(e)
+  y <- alpha * sig * exp(-alpha * (t - mu)) * ibeta(z, a, b)
+  y <- y / sum(y)
+  return(data.frame(t, y, e))
+}
+
+```
+
+Try out the process in serial. 
+1. row of params 
+2a. simulate truth, all sites/years have same physiological traits (could change to random effects)
+2b. mixture models of truth for comparison of distribution parameters? 
+3. simulate counts
+4a. mixture models of counts
+4b. mixture models of counts after smoothing
+5. assign counts to generation classification
+6. Get N and mu for each site x year x generation with another round of mixture models?
+7. Scores to assess fit: RMSE/R2 for N, phenology metrics (mean, median, mode, quantiles, skew distribution parameters?)
+
+```{r serial attempt}
+
+counts <- Simulate_Counts(data = params[1, ], gdd = gdd)
+
+results <- counts %>% 
+  group_by(Year) %>% 
+  do(mixmods = CompareMixMods(dat = ., mvmin = 1, mvmax = 2))
+
+```
+
+
+
+```{r parallel attempt}
 # test <- Simulate_Counts(params[1,])
 
 # # this works, might want to use do instead of map for parallel dplyr processing
@@ -453,17 +553,17 @@ Simulate_Counts <- function(data, gdd){
 # test3 <- CompareMixMods(dat = test2$counts[[1]], mvmin = 1, mvmax = 3)
 
 # try parallel
-cl <- 4
+cl <- 5
 group <- rep(1:cl, length.out = nrow(params))
 params <- bind_cols(tibble(group), params)
 
 cluster <- create_cluster(cores = cl)
-by_group <- params[1:4, ] %>%
+by_group <- params[901:905, ] %>%
     partition(group, cluster = cluster)
 by_group
 
 mvmin <- 1
-mvmax <- 2
+mvmax <- 3
 
 # Utilize pipe (%>%) to assign libraries, functions, and values to clusters
 by_group %>%
@@ -498,7 +598,7 @@ by_group <- data_par %>%
 by_group
 
 mvmin <- 1
-mvmax <- 2
+mvmax <- 3
 
 # Utilize pipe (%>%) to assign libraries, functions, and values to clusters
 by_group %>%
@@ -518,14 +618,42 @@ by_group %>%
 
 
 
-data_par2 <- data_par %>% 
-  group_by(group) %>% 
+data_par2 <- by_group %>% 
+  # group_by(group) %>% 
     do(ests = CompareMixMods(dat = .$counts, mvmin = 1, mvmax = 2)) %>% 
     collect() %>% 
     as_tibble()
 
 test <- CompareMixMods(dat = data_par$counts[[1]], mvmin, mvmax)
 test2 <- CompareMixMods(dat = data_par$counts[[4]], mvmin, mvmax)
+
+
+
+
+counts <- data_par$counts[[4]]
+counts$SiteID <- as.factor(counts$SiteID)
+
+modnb <- gam(Y ~ 
+                         # s(zlistlength)+
+                         s(maxT)+
+                         # s(zduration)+
+                         # s(SiteYear, cumdegday, bs = "fs", k = 5, m = 1) +
+                          s(AccumDD, bs = "cc", k = 20) +
+                         # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(5, 20), d = c(2, 1)) +
+                         s(SiteID, bs = "re"),
+                         # s(Ordinal, bs = "cc", k = 10),
+                       # family = nb(theta = NULL, link = "log"),
+                       family = poisson(link = "log"),
+                       data = counts,
+                       method = "REML", 
+                       optimizer = c("outer", "newton"), 
+                       # gamma = 1.4, 
+                       control = list(maxit = 500))
+
+  counts$Y <- predict(modnb, newdata = counts, type = "response")
+
+test4 <- CompareMixMods(dat = counts, mvmin, mvmax)
+
 
 ```
 
