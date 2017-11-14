@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
+source("funcs_pop.R")
 # packages to load
 library(mgcv)
 library(ggplot2)
@@ -409,127 +409,31 @@ pp
 ```
 
 
-
-For each row of parameters, simulate true values and counts.
-
-```{r simulate}
-Simulate_Truth <- function(data){
-  set.seed(111) # use for all rows?
-  
-  # voltinism varying by site
-  if(data$ngen == 1){
-    gen_ddreq <- 800
-    gen_relsize = 1
-    gen_relsprd = 1
-  }else{
-    ngen <- data$ngen
-    gen_ddreq <- seq(600, 1600, length.out = ngen)
-    gen_relsize <- switch(data$gen_size, 
-                          "equal" = rep(1, ngen),
-                          "inc" = seq(1, 2, length.out = ngen),
-                          "dec" = seq(2, 1, length.out = ngen))
-    gen_relsprd <- seq(1, 2, length.out = ngen)
-  }
-  # simulate phenology for each generation and combine
-  dflist <- list()
-  for (g in 1:data$ngen){
-    df <- Abund_Curve(t = seq(0, 3000, 1)/100, alpha = data$death_rate, 
-                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
-    df$Gen <- g
-    dflist[[g]] <- df
-  }
-  dfall <- bind_rows(dflist)
-  return(dfall)
-}
-
-
-Simulate_Counts <- function(data, gdd){
-  set.seed(111) # use for all rows?
-  # randomly select sites and years to use their coordinates and historical gdd accumulation
-  sites <- sample(x = unique(gdd$SiteID), size = data$nsite, replace = FALSE)
-  years <- sample(x = unique(gdd$Year), size = data$nyear, replace = FALSE)
-  dddat <- gdd %>% 
-    filter(SiteID %in% sites, Year %in% years) %>% 
-    filter(DOY %in% (seq(90, 293, 7) + sample.int(n=6, size=30, replace=TRUE))) %>% 
-    sample_frac(size = 1 - data$surv_missing)
-  
-  # voltinism varying by site
-  if(data$ngen == 1){
-    gen_ddreq <- 800
-    gen_relsize = 1
-    gen_relsprd = 1
-  }else{
-    ngen <- data$ngen
-    gen_ddreq <- seq(600, 1600, length.out = ngen)
-    gen_relsize <- switch(data$gen_size, 
-                          "equal" = rep(1, ngen),
-                          "inc" = seq(1, 2, length.out = ngen),
-                          "dec" = seq(2, 1, length.out = ngen))
-    gen_relsprd <- seq(1, 2, length.out = ngen)
-  }
-  # simulate phenology for each generation and combine
-  dflist <- list()
-  for (g in 1:data$ngen){
-    df <- Abund_Curve(t = dddat$AccumDD/100, alpha = data$death_rate, 
-                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
-    df <- cbind(data.frame(dddat), df)
-    df$Gen <- g
-    dflist[[g]] <- df
-  }
-  dfall <- bind_rows(dflist) %>% 
-    arrange(SiteID, SiteDate)
-  
-  # counting process
-  counts <- dfall %>% 
-    group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT) %>% 
-    summarise(RelProp = sum(y * gen_relsize[Gen]),
-              DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
-    group_by(SiteID, Year) %>% 
-    mutate(RelProp = RelProp / sum(RelProp),
-           M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
-           N = rpois(length(RelProp), lambda = RelProp * M),
-           Y = rbinom(length(N), size = N, prob = DP)) %>% 
-    data.frame()
-  return(counts)
-}
-
-
-Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
-  
-  z <- exp((t - mu) / beta) / (1 + exp((t - mu) / beta))
-  a <- 1 + alpha * beta
-  b <- sig - alpha * beta
-  
-  # incomplete beta
-  ibeta <- function(z, a, b){ pbeta(z, a, b) * beta(a, b) }
-  
-  e <- (sig * (exp((t - mu)/beta)))/(beta * (1 + exp((t - mu)/beta)))^(sig + 1)
-  e <- e / sum(e)
-  y <- alpha * sig * exp(-alpha * (t - mu)) * ibeta(z, a, b)
-  y <- y / sum(y)
-  return(data.frame(t, y, e))
-}
-
-```
-
 Try out the process in serial. 
 1. row of params 
 2a. simulate truth, all sites/years have same physiological traits (could change to random effects)
 2b. mixture models of truth for comparison of distribution parameters? 
 3. simulate counts
 4a. mixture models of counts
-4b. mixture models of counts after smoothing
+4b. mixture models of counts after GAM smoothing (and interpolating missing surveys)
 5. assign counts to generation classification
 6. Get N and mu for each site x year x generation with another round of mixture models?
 7. Scores to assess fit: RMSE/R2 for N, phenology metrics (mean, median, mode, quantiles, skew distribution parameters?)
 
 ```{r serial attempt}
 
-counts <- Simulate_Counts(data = params[1, ], gdd = gdd)
+counts <- Simulate_Counts(data = params[5188, ], gdd = gdd)
 
 results <- counts %>% 
   group_by(Year) %>% 
-  do(mixmods = CompareMixMods(dat = ., mvmin = 1, mvmax = 2))
+  do(mixmods = CompareMixMods(dat = ., mvmin = 1, mvmax = 3))
+
+# list-column output, each group (2)[[ngen (3)]][[mixmod (7)]]
+
+# Assign generations to each day's count, splitting into multiple rows if necessary?
+
+# Extract summary stats for each generation's distribution
+
 
 ```
 

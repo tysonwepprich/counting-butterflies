@@ -86,7 +86,7 @@ Simulate_Counts <- function(data, gdd){
   }else{
     ngen <- data$ngen
     gen_ddreq <- seq(600, 1600, length.out = ngen)
-    gen_relsize <- switch(data$gen_size, 
+    gen_relsize <- switch(as.character(data$gen_size), 
                           "equal" = rep(1, ngen),
                           "inc" = seq(1, 2, length.out = ngen),
                           "dec" = seq(2, 1, length.out = ngen))
@@ -165,8 +165,25 @@ CompareMixMods <- function(dat, mvmin, mvmax){
 
 # take mixture model probability for each observation's class,
 # then assign generations to each count (possibly splitting them)
-Assign_generation <- function(){
-  
+Assign_generation <- function(counts, mod){
+  if(is.null(mod$error)){
+    modtype <- attr(mod$result, "class")
+    if(modtype == "Mclust"){
+      # mclust param
+      
+      # simulate each generation
+      
+      # extract curve summary
+    }else{
+      # mixsmsn
+      
+      # simulate each generation
+      
+      # extract curve summary
+    }
+  }else{
+    # error statement
+  }
   
 }
 
@@ -175,15 +192,40 @@ Summ_mixmod <- function(mod){
   if(is.null(mod$error)){
     modtype <- attr(mod$result, "class")
     if(modtype == "Mclust"){
-      # mclust
+      # mclust param
+      
+      # simulate each generation
+      
+      # extract curve summary
     }else{
       # mixsmsn
+      
+      res <- data.frame(mu = mod$result$mu, sigma2 = mod$result$sigma2, shape = mod$result$shape,
+                        w = mod$result$pii, nu = mod$result$nu, aic = mod$result$aic, bic = mod$result$bic,
+                        edc = mod$result$edc, icl = mod$result$icl, model = modtype)
+      
+      # simulate each generation and
+      # extract curve summary
+      gen_res <- list()
+      for (i in seq_along(as.numeric(rownames(res)))){
+        x <- seq(0, 3000, 10)
+        if (modtype %in% c("Skew.normal", "Normal")){
+          y <- mixsmsn:::dSN(y = x, mu = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i])
+        }else if(modtype %in% c("t", "Skew.t")){
+          y <- mixsmsn:::dt.ls(x = x, loc = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i], nu = res$nu[i])
+        }
+        gen_res[[i]] <- Summ_curve(t = x, y = y)
+      }
+      gen_res_df <- bind_rows(gen_res) %>% 
+        mutate(gen = as.numeric(rownames(res))) %>% 
+        bind_cols(res)
     }
   }else{
     # error statement
   }
   
   # make data.frame for output values
+  
   
   
 }
