@@ -77,8 +77,8 @@ GDD across gradient
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 
 # sitesumm <- gdd %>% 
@@ -424,15 +424,27 @@ Try out the process in serial.
 
 counts <- Simulate_Counts(data = params[5188, ], gdd = gdd)
 
-results <- counts %>% 
+results <- counts %>%
+  mutate(mvmin = 1, mvmax = 3) %>% 
   group_by(Year) %>% 
-  do(mixmods = CompareMixMods(dat = ., mvmin = 1, mvmax = 3))
+  do(mixmods = CompareMixMods(dat = .))
+
+# # can't get purrr to work
+# results <- counts %>%
+#   mutate(mvmin = 1, mvmax = 3) %>% 
+#   tidyr::nest(-Year) %>%
+#   mutate(mixmods = map(data, CompareMixMods))
 
 # list-column output, each group (2)[[ngen (3)]][[mixmod (7)]]
 
 # Assign generations to each day's count, splitting into multiple rows if necessary?
 
+
 # Extract summary stats for each generation's distribution
+summ_mods <- results %>% 
+  ungroup() %>% 
+  group_by(Year) %>% 
+  do(Summ_mixmod(.))
 
 
 ```

@@ -124,40 +124,43 @@ Simulate_Counts <- function(data, gdd){
 
 # fit different mixture models, output a list of model results
 # 
-CompareMixMods <- function(dat, mvmin, mvmax){
+CompareMixMods <- function(dat){
   dd <- dat$AccumDD
   y <- dat$Y
   dd_dist <- rep(dd, y)
-  
-  out <- as.list(mvmin:mvmax)
-  names(out) <- paste0("gen", c(mvmin:mvmax))
-  for (i in seq_along(out)){
+  mvmin <- dat$mvmin[1]
+  mvmax <- dat$mvmax[1]
+  gens <- c(mvmin:mvmax)
+  # out <- as.list(mvmin:mvmax)
+  # names(out) <- paste0("gen", c(mvmin:mvmax))
+  out <- list()
+  for (i in seq_along(gens)){
     
     safe_mix <- safely(smsn.mix)
     # skew normal
-    out[[i]]$sknorm <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Skew.normal", 
+    mod_sknorm <- safe_mix(dd_dist, nu = 5, g = i, get.init = TRUE, family = "Skew.normal", 
                                 calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
     
     # Normal het from smsn
-    out[[i]]$norm <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Normal", 
+    mod_norm <- safe_mix(dd_dist, nu = 5, g = i, get.init = TRUE, family = "Normal", 
                               calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
     
     
     
     # T DIST
     # get initial vals from search for best num gen
-    out[[i]]$skt <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "Skew.t", 
+    mod_skt <- safe_mix(dd_dist, nu = 5, g = i, get.init = TRUE, family = "Skew.t", 
                              calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
     
     # T het from smsn
-    out[[i]]$t <- safe_mix(dd_dist, nu = 5, g = g, get.init = TRUE, family = "t", 
+    mod_t <- safe_mix(dd_dist, nu = 5, g = i, get.init = TRUE, family = "t", 
                            calc.im = TRUE, obs.prob = TRUE, kmeans.param = list(n.start = 5))
     
     # mclust
     safe_mclust <- safely(Mclust)
-    out[[i]]$mc_hom <- safe_mclust(dd_dist, G=g, modelNames = "E")
-    out[[i]]$mc_het <- safe_mclust(dd_dist, G=g, modelNames = "V")
-    
+    mod_mc_hom <- safe_mclust(dd_dist, G=i, modelNames = "E")
+    mod_mc_het <- safe_mclust(dd_dist, G=i, modelNames = "V")
+    out[[i]] <- list(mod_sknorm, mod_norm, mod_skt, mod_t, mod_mc_hom, mod_mc_het)
   }
   return(out)
 }
@@ -165,7 +168,18 @@ CompareMixMods <- function(dat, mvmin, mvmax){
 
 # take mixture model probability for each observation's class,
 # then assign generations to each count (possibly splitting them)
-Assign_generation <- function(counts, mod){
+Assign_generation <- function(counts, results){
+  yrs <- unique(results$Year)
+  for (y in seq_along(yrs)){
+    cts <- counts %>% filter(Year == y)
+    res <- results %>% filter(Year == y)
+    allmods <- flatten(flatten(res$mixmods))
+    alldf <- list()
+    for (m in seq_along(allmods)){
+      mod <- allmods[[m]]
+      if(is.null(mod$error)){
+  }
+  
   if(is.null(mod$error)){
     modtype <- attr(mod$result, "class")
     if(modtype == "Mclust"){
@@ -188,46 +202,67 @@ Assign_generation <- function(counts, mod){
 }
 
 # Extract results from mixture model objects
-Summ_mixmod <- function(mod){
-  if(is.null(mod$error)){
-    modtype <- attr(mod$result, "class")
-    if(modtype == "Mclust"){
-      # mclust param
-      
-      # simulate each generation
-      
-      # extract curve summary
-    }else{
-      # mixsmsn
-      
-      res <- data.frame(mu = mod$result$mu, sigma2 = mod$result$sigma2, shape = mod$result$shape,
-                        w = mod$result$pii, nu = mod$result$nu, aic = mod$result$aic, bic = mod$result$bic,
-                        edc = mod$result$edc, icl = mod$result$icl, model = modtype)
-      
-      # simulate each generation and
-      # extract curve summary
-      gen_res <- list()
-      for (i in seq_along(as.numeric(rownames(res)))){
-        x <- seq(0, 3000, 10)
-        if (modtype %in% c("Skew.normal", "Normal")){
-          y <- mixsmsn:::dSN(y = x, mu = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i])
-        }else if(modtype %in% c("t", "Skew.t")){
-          y <- mixsmsn:::dt.ls(x = x, loc = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i], nu = res$nu[i])
+Summ_mixmod <- function(df){
+  allmods <- flatten(flatten(df$mixmods))
+  alldf <- list()
+  for (m in seq_along(allmods)){
+    mod <- allmods[[m]]
+    if(is.null(mod$error)){
+      modtype <- attr(mod$result, "class")
+      if(modtype == "Mclust"){
+        # mclust param
+        modtype <- paste(modtype, mod$result$modelName, sep = "_")
+        res <- data.frame(mu = mod$result$parameters$mean, sigma2 = mod$result$parameters$variance$sigmasq, shape = NA,
+                          w = mod$result$parameters$pro, nu = NA, aic = NA, bic = mod$result$bic,
+                          edc = NA, icl = NA, model = modtype)
+        
+        # simulate each generation
+        # extract curve summary
+        gen_res <- list()
+        for (i in seq_along(as.numeric(rownames(res)))){
+          x <- seq(0, 3000, 10)
+          y <- dnorm(x = x, mean = res$mu[i], sd = sqrt(res$sigma2[i]))
+          gen_res[[i]] <- Summ_curve(t = x, y = y)
         }
-        gen_res[[i]] <- Summ_curve(t = x, y = y)
+        gen_res_df <- bind_rows(gen_res) %>% 
+          mutate(gen = as.numeric(rownames(res))) %>% 
+          bind_cols(res)
+        
+      }else{
+        # mixsmsn
+        
+        res <- data.frame(mu = mod$result$mu, sigma2 = mod$result$sigma2, shape = mod$result$shape,
+                          w = mod$result$pii, nu = mod$result$nu, aic = mod$result$aic, bic = mod$result$bic,
+                          edc = mod$result$edc, icl = mod$result$icl, model = modtype)
+        
+        # simulate each generation and
+        # extract curve summary
+        gen_res <- list()
+        for (i in seq_along(as.numeric(rownames(res)))){
+          x <- seq(0, 3000, 10)
+          if (modtype %in% c("Skew.normal", "Normal")){
+            y <- mixsmsn:::dSN(y = x, mu = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i])
+          }else if(modtype %in% c("t", "Skew.t")){
+            y <- mixsmsn:::dt.ls(x = x, loc = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i], nu = res$nu[i])
+          }
+          gen_res[[i]] <- Summ_curve(t = x, y = y)
+        }
+        gen_res_df <- bind_rows(gen_res) %>% 
+          mutate(gen = as.numeric(rownames(res))) %>% 
+          bind_cols(res)
       }
-      gen_res_df <- bind_rows(gen_res) %>% 
-        mutate(gen = as.numeric(rownames(res))) %>% 
-        bind_cols(res)
+    }else{
+      # error statement
+      gen_res_df <- data.frame(curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
+                               curve_q0.9 = NA, gen = NA, mu= NA, sigma2 = NA, shape = NA,
+                               w = NA, nu = NA, aic = NA, bic = NA, edc = NA, icl = NA, model = NA)
     }
-  }else{
-    # error statement
+    alldf[[m]] <- gen_res_df
   }
   
   # make data.frame for output values
-  
-  
-  
+  outdf <- bind_rows(alldf)
+  return(outdf)
 }
 
 
