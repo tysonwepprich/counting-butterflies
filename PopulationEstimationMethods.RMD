@@ -352,13 +352,13 @@ Data degradation to see how sites/years should be grouped to keep model estimate
 
 ```{r params}
 # parameters
-nsite <- c(2, 4, 8, 16, 32, 64) # up to 140 OH sites
-nyear <- c(2, 4, 8, 16) # up to 35 years in Daymet data
+nsite <- c(4, 16, 64) # up to 140 OH sites
+nyear <- c(4, 16) # up to 35 years in Daymet data
 nsurv <- 30
-surv_missing <- c(0, .25, .5) # remove surveys for each site, based on data distribution
+surv_missing <- c(0, .2, .4) # remove surveys from all counts
 # site_missing <- .2 # turnover across years
-group_struct <- c("all", "site", "year", "siteyear")
-gam_smooth <- c("yes", "no")
+# group_struct <- c("all", "site", "year", "siteyear")
+gam_smooth <- c("none", "interpolate", "preds_8day", "preds_4day")
 
 ngen <- c(1:4)
 gen_size <- c("equal", "inc", "dec")
@@ -371,17 +371,26 @@ death_rate <- c(.6, .8) # on weekly rate
 negbin_mu <- 100
 negbin_disp <- 1
 # detection probability parameters (logit scale)
-detprob_b0 <- c(-10, -7) 
+detprob_b0 <- -7
 detprob_b1 <- .6
 detprob_b2 <- -.01
+detprob_model <- c("known", "covariate", "none")
 
-# # nonlinear det prob
-# x <- seq(-5, 45, .1)
-# y <- plogis(-7 + x * .6 + -.01 * x^2)
-# plot(x, y)
+# site/year variation in mu
+site_mu_sd <- c(25, 50)
+year_mu_sd <- c(25, 50)
 
-params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, group_struct = group_struct, gam_smooth = gam_smooth, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2)
+# nonlinear det prob
+x <- seq(-5, 45, .1)
+y <- plogis(-10 + x * .6 + -.01 * x^2)
+plot(x, y)
+
+params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, gam_smooth = gam_smooth, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2, detprob_model = detprob_model, site_mu_sd = site_mu_sd, year_mu_sd = year_mu_sd)
 params <- expand.grid(params)
+
+# some parameter combinations don't make sense, try to exclude to save time
+params <- params[-which(params$ngen == 1 & params$gen_size %in% c("inc", "dec")), ]
+params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpolate"), ]
 
 ```
 
@@ -420,14 +429,42 @@ Try out the process in serial.
 6. Get N and mu for each site x year x generation with another round of mixture models?
 7. Scores to assess fit: RMSE/R2 for N, phenology metrics (mean, median, mode, quantiles, skew distribution parameters?)
 
+OR:
+1. row of params
+2a. simulate statewide truth and site/year counts
+2b. degree of missing data
+2c. known det prob, covariate, or no accounting
+3a. mixture models of site/year counts with raw/detprob-corrected counts
+3b. mixture models of site/year counts with GAM interpolation of missing
+3c. mixture models of site/year counts with all GAM predictions
+4. assess fit of site/year mixture models to simulated site/year N, statewide truth and G
+
+Will have mixture model errors when low counts
+Weekly GAM predictions? Why not daily if using all predicted values?
+
 ```{r serial attempt}
+test <- params[500, ]
+test$gam_smooth <- "preds_8day"
+test$detprob_model <- "covariate"
 
-counts <- Simulate_Counts(data = params[5188, ], gdd = gdd)
+counts <- Simulate_Counts(data = test, gdd = gdd)
 
-results <- counts %>%
-  mutate(mvmin = 1, mvmax = 3) %>% 
-  group_by(Year) %>% 
-  do(mixmods = CompareMixMods(dat = .))
+# GAM interpolation/prediction
+adjcounts <- Adjust_Counts(data = test, counts)
+
+system.time({
+results <- adjcounts %>%
+  # mutate(mvmin = 1, mvmax = 3) %>% 
+  group_by(SiteID, Year) %>% 
+  mutate(weeks_obs = length(which(adjY > 0)),
+         total_obs = sum(round(adjY))) %>% 
+  filter(weeks_obs >= 2, total_obs >= 5) %>% 
+  do(mixmods = CompareMixMods(dat = ., mvmax = 2))
+})
+
+allresults <- adjcounts %>% 
+  do(mixmods = CompareMixMods(dat = ., mvmax = 2)) %>% 
+  do(Summ_mixmod(.))
 
 # # can't get purrr to work
 # results <- counts %>%
@@ -443,9 +480,68 @@ results <- counts %>%
 # Extract summary stats for each generation's distribution
 summ_mods <- results %>% 
   ungroup() %>% 
-  group_by(Year) %>% 
+  group_by(SiteID, Year) %>% 
   do(Summ_mixmod(.))
+# model errors lead to blank rows of NA
+# anti_join to learn what these are?
+mods_work <- summ_mods %>% 
+  select(SiteID, Year, maxgen, model) %>% 
+  distinct()
+mods_all <- expand.grid(1:2, unique(summ_mods$model))
+names(mods_all) <- c("maxgen", "model")
+mods_all <- mods_all[complete.cases(mods_all), ]
 
+mods_skip <- summ_mods %>% 
+  ungroup() %>% 
+  select(SiteID, Year) %>% 
+  distinct() %>% 
+  group_by(SiteID, Year) %>% 
+  do(., newcols = mods_all) %>% 
+  unnest() %>% 
+  anti_join(mods_work)
+
+mods_skip <- test[-which(test$maxgen == 1 & test$model == "Mclust_V"), ]
+  
+  
+  
+# chooses the first generation of each group, not optimal
+# might also want to summarise bic delta for each worse model in each grouping
+best_mods <- summ_mods %>% 
+  ungroup() %>% 
+  filter(is.na(bic) == FALSE) %>% 
+  mutate(gen = ifelse(is.na(gen), 1, gen),
+         maxgen = ifelse(is.na(maxgen), 1, maxgen),
+         bic = ifelse(bic < 0, -bic, bic)) %>% 
+  group_by(SiteID, Year, model, maxgen) %>%
+  mutate(badmixmod = sum(mixmod_flag)) %>% 
+  filter(badmixmod == 0) %>% 
+  group_by(SiteID, Year) %>% 
+  # arrange(bic)
+  filter(bic == min(bic))
+  
+  
+# right # gen?
+res3 <- best_mods %>% 
+  group_by(SiteID, Year, model) %>% 
+  summarise(maxgen = maxgen[1])
+
+
+size <- adjcounts %>% 
+  group_by(SiteID, Year) %>% 
+  summarise(popsize = sum(adjY)) %>% 
+  merge(res3)
+
+mutest <- adjcounts %>% 
+  select(SiteID, Year, Site_RE, Year_RE, M) %>% 
+  distinct() %>% 
+  left_join(best_mods) %>% 
+  mutate(Total_RE = Site_RE + Year_RE)
+  
+plt <- ggplot(mutest, aes(x = Total_RE, y = curve_q0.1)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~gen, scales = "free_y")
+plt
 
 ```
 
