@@ -69,7 +69,7 @@ Simulate_Truth <- function(data){
 
 # data argument is row of parameters
 Simulate_Counts <- function(data, gdd){
-  # set.seed(111) # use for all rows?
+  set.seed(data$seed) # use for all rows?
   # randomly select sites and years to use their coordinates and historical gdd accumulation
   sites <- sample(x = unique(gdd$SiteID), size = data$nsite, replace = FALSE)
   years <- sample(x = unique(gdd$Year), size = data$nyear, replace = FALSE)
@@ -165,17 +165,13 @@ Adjust_Counts <- function(data, counts){
     
     if(data$detprob_model %in% c("none", "known")){
       gammod <- safe_gam(adjY ~ 
-                           # s(zlistlength)+
-                           # s(maxT)+
-                           # s(zduration)+
-                           # s(SiteYearID, AccumDD, bs = "fs", k = 5, m = 1) +
-                           ti(SiteID, AccumDD, bs = c("re", "cc"), k = c(4, 10)) +
-                           ti(Year, AccumDD, bs = c("re", "cc"), k = c(4, 10)) +
-                           s(AccumDD, bs = "cc", k = 20) +
+                           # s(maxT) +
+                           s(AccumDD, bs = "cc", k = 15, by = SiteID) +
+                           s(AccumDD, bs = "cc", k = 15, by = Year) +
                            # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
-                           s(Year, bs = "re") +
-                           s(SiteID, bs = "re"),
-                         # s(Ordinal, bs = "cc", k = 10),
+                           # s(Year, bs = "re", k = 4) +
+                           # s(SiteID, bs = "re", k = 4),
+                            s(SiteYearID, bs = "re", k = 5),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -186,17 +182,13 @@ Adjust_Counts <- function(data, counts){
     }
     if(data$detprob_model == "covariate"){
       gammod <- safe_gam(adjY ~ 
-                           # s(zlistlength)+
-                           s(maxT)+
-                           # s(zduration)+
-                           # s(SiteYearID, AccumDD, bs = "fs", k = 5, m = 1) +
-                           ti(SiteID, AccumDD, bs = c("re", "cc"), k = c(4, 10)) +
-                           ti(Year, AccumDD, bs = c("re", "cc"), k = c(4, 10)) +
-                           s(AccumDD, bs = "cc", k = 20) +
-                           # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(5, 20), d = c(2, 1)) +
-                           s(Year, bs = "re") +
-                           s(SiteID, bs = "re"),
-                         # s(Ordinal, bs = "cc", k = 10),
+                           s(maxT) +
+                           s(AccumDD, bs = "cc", k = 15, by = SiteID) +
+                           s(AccumDD, bs = "cc", k = 15, by = Year) +
+                           # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
+                           # s(Year, bs = "re", k = 4) +
+                           # s(SiteID, bs = "re", k = 4),
+                           s(SiteYearID, bs = "re", k = 5),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -222,7 +214,7 @@ Adjust_Counts <- function(data, counts){
     #   newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
     # }
     newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
-    
+    newdata$nb_theta <- gammod$result$family$getTheta(TRUE)
     
     if(data$gam_smooth == "interpolate"){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
@@ -239,6 +231,7 @@ Adjust_Counts <- function(data, counts){
   }else{
     # error in gam fit
     adjcounts$gam_flag <- 1
+    adjcounts$nb_disp <- NA
     return(adjcounts)  
   }
 }

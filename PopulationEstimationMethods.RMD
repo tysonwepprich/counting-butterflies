@@ -444,8 +444,8 @@ Weekly GAM predictions? Why not daily if using all predicted values?
 
 ```{r serial attempt}
 test <- params[500, ]
-test$gam_smooth <- "preds_8day"
-test$detprob_model <- "covariate"
+# test$gam_smooth <- "preds_8day"
+# test$detprob_model <- "covariate"
 
 counts <- Simulate_Counts(data = test, gdd = gdd)
 
@@ -521,7 +521,7 @@ best_mods <- summ_mods %>%
   
   
 # right # gen?
-res3 <- best_mods %>% 
+res1 <- best_mods %>% 
   group_by(SiteID, Year, model) %>% 
   summarise(maxgen = maxgen[1])
 
