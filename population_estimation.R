@@ -92,13 +92,17 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 params$seed <- 1:nrow(params)
 
 
+done <- list.files('results_0')
+done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
+
+params <- params[-which(params$seed %in% done), ]
 ######
 # analysis workflow
 
-# 
-# test <- params[500, ]
-# test$site_mu_sd <- 50
-# test$year_mu_sd <- 50
+
+# test <- params[5, ]
+# # test$site_mu_sd <- 50
+# # test$year_mu_sd <- 50
 # # test$gam_smooth <- "preds_8day"
 # # test$detprob_model <- "covariate"
 # 
@@ -115,23 +119,29 @@ params$seed <- 1:nrow(params)
 # 
 # # GAM interpolation/prediction
 # adjcounts <- Adjust_Counts(data = test, counts)
+# plt <- ggplot(adjcounts, aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
+#   geom_path() +
+#   facet_wrap(~SiteID, ncol = 2, scales = "free_y")
+# plt
 # 
 # system.time({
 #   results <- adjcounts %>%
-#     # mutate(mvmin = 1, mvmax = 3) %>% 
-#     group_by(SiteID, Year) %>% 
+#     # mutate(mvmin = 1, mvmax = 3) %>%
+#     group_by(SiteID, Year) %>%
 #     mutate(weeks_obs = length(which(adjY > 0)),
-#            total_obs = sum(round(adjY))) %>% 
-#     filter(weeks_obs >= 2, total_obs >= 5) %>% 
+#            total_obs = sum(round(adjY))) %>%
+#     filter(weeks_obs >= 2, total_obs >= 5) %>%
 #     do(mixmods = CompareMixMods(dat = ., mvmax = 3))
 # })
-# 
-params <- params %>% 
-  filter(nsite == 4, nyear == 4, ngen == 2, gen_size == "equal",
-         peak_sd == 10, death_rate == 0.6, site_mu_sd == 25, 
-         year_mu_sd == 50, surv_missing != 0.2)
 
-ncores <- 6
+
+# # test run with a few rows
+# params <- params %>% 
+#   filter(nsite == 4, nyear == 4, ngen == 2, gen_size == "equal",
+#          peak_sd == 10, death_rate == 0.6, site_mu_sd == 25, 
+#          year_mu_sd == 50, surv_missing != 0.2)
+
+ncores <- 4
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -188,6 +198,9 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       outlist <- list(test, counts, adjcounts, summ_mods)   
                       saveRDS(object = outlist, file = paste("popest", test$seed, sep = "_"))
+                      
+                      rm(test, counts, adjcounts, summ_mods, results)
+                      gc()
                     } # close dopar
 
 
@@ -219,9 +232,9 @@ right_ngen <- res %>%
   left_join(params, by = "seed") %>% 
   group_by(seed, SiteID, Year, model, surv_missing, gam_smooth, detprob_model) %>% 
   summarise(correct = length(which(maxgen == 2))/2) %>% 
-  group_by(detprob_model) %>% 
-  summarise(right = sum(correct, na.rm = TRUE))
-
+  group_by(model) %>% 
+  summarise(propright = sum(correct, na.rm = TRUE) / length(correct))
+right_ngen
 
 
 
@@ -235,7 +248,7 @@ summ_mods <- results %>%
 mods_work <- summ_mods %>% 
   select(SiteID, Year, maxgen, model) %>% 
   distinct()
-mods_all <- expand.grid(1:3, unique(summ_mods$model))
+mods_all <- expand.grid(1:2, unique(summ_mods$model))
 names(mods_all) <- c("maxgen", "model")
 mods_all <- mods_all[complete.cases(mods_all), ]
 

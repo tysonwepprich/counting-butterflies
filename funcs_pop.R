@@ -22,7 +22,7 @@ Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
 Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
   cdf <- cumsum(y) / sum(y)
   cmean <- weighted.mean(t, y)
-  cmax <- t[which(y == max(y))]
+  cmax <- t[which(y == max(y))][1]
   
   cquant <- rep(NA, length(quants))
   for (i in seq_along(quants)){
@@ -147,7 +147,10 @@ Adjust_Counts <- function(data, counts){
   counts_8day <- counts_4day[seq(1, nrow(counts_4day), 2), ]
 
   adjcounts <- counts_8day %>% 
-    sample_frac(size = 1 - data$surv_missing)
+    sample_frac(size = 1 - data$surv_missing) #%>% 
+    # group_by(SiteYearID) %>% 
+    # filter(sum(Y) > 0) %>% 
+    # droplevels()
   
   if(data$detprob_model == "known"){
     adjcounts <- mutate(adjcounts, adjY = Y / DP)
@@ -165,13 +168,17 @@ Adjust_Counts <- function(data, counts){
     
     if(data$detprob_model %in% c("none", "known")){
       gammod <- safe_gam(adjY ~ 
+                           # SiteID +
+                           # Year +
                            # s(maxT) +
-                           s(AccumDD, bs = "cc", k = 15, by = SiteID) +
-                           s(AccumDD, bs = "cc", k = 15, by = Year) +
+                            s(AccumDD, bs = "cc", k = 20) +
+                            s(AccumDD, SiteYearID, bs = "fs", k = 5, m = 1),
+                           # s(AccumDD, bs = "cc", k = 15, by = SiteID) +
+                           # s(AccumDD, bs = "cc", k = 15, by = Year) +
                            # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
                            # s(Year, bs = "re", k = 4) +
                            # s(SiteID, bs = "re", k = 4),
-                            s(SiteYearID, bs = "re", k = 5),
+                            # s(SiteYearID, bs = "re", k = 5),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -183,12 +190,14 @@ Adjust_Counts <- function(data, counts){
     if(data$detprob_model == "covariate"){
       gammod <- safe_gam(adjY ~ 
                            s(maxT) +
-                           s(AccumDD, bs = "cc", k = 15, by = SiteID) +
-                           s(AccumDD, bs = "cc", k = 15, by = Year) +
+                           s(AccumDD, bs = "cc", k = 20) +
+                           s(AccumDD, SiteYearID, bs = "fs", k = 5, m = 1),
+                           # s(AccumDD, bs = "cc", k = 15, by = SiteID) +
+                           # s(AccumDD, bs = "cc", k = 15, by = Year) +
                            # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
                            # s(Year, bs = "re", k = 4) +
                            # s(SiteID, bs = "re", k = 4),
-                           s(SiteYearID, bs = "re", k = 5),
+                           # s(SiteYearID, bs = "re", k = 5),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -345,6 +354,8 @@ CompareMixMods <- function(dat, mvmax){
 
 # Extract results from mixture model objects
 Summ_mixmod <- function(df){
+  # print(df$SiteID)
+  # print(df$Year)
   allmods <- flatten(flatten(df$mixmods))
   alldf <- list()
   for (m in seq_along(allmods)){
@@ -399,7 +410,7 @@ Summ_mixmod <- function(df){
           }else if(modtype %in% c("t", "Skew.t")){
             y <- mixsmsn:::dt.ls(x = x, loc = res$mu[i], sigma2 = res$sigma2[i], shape = res$shape[i], nu = res$nu[i])
           }
-          if(max(y) == 0){
+          if(max(y) == 0 | length(which(is.finite(y))) == 0){
             gen_res[[i]] <- data.frame(curve_mean = NA, curve_max = NA, 
                                        curve_q0.1 = NA, curve_q0.5 = NA, curve_q0.9 = NA, mixmod_flag = 1)
           }else{
