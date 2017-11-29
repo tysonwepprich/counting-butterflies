@@ -35,36 +35,36 @@ Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
   return(df)
 }
 
-# data argument is row of parameters
-# this assumes all sites/years have common physiology
-Simulate_Truth <- function(data){
-  set.seed(111) # use for all rows?
-  
-  # voltinism varying by site
-  if(data$ngen == 1){
-    gen_ddreq <- 800
-    gen_relsize = 1
-    gen_relsprd = 1
-  }else{
-    ngen <- data$ngen
-    gen_ddreq <- seq(600, 1600, length.out = ngen)
-    gen_relsize <- switch(data$gen_size, 
-                          "equal" = rep(1, ngen),
-                          "inc" = seq(1, 2, length.out = ngen),
-                          "dec" = seq(2, 1, length.out = ngen))
-    gen_relsprd <- seq(1, 2, length.out = ngen)
-  }
-  # simulate phenology for each generation and combine
-  dflist <- list()
-  for (g in 1:data$ngen){
-    df <- Abund_Curve(t = seq(0, 3000, 1)/100, alpha = data$death_rate, 
-                      beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
-    df$Gen <- g
-    dflist[[g]] <- df
-  }
-  dfall <- bind_rows(dflist)
-  return(dfall)
-}
+# # data argument is row of parameters
+# # this assumes all sites/years have common physiology
+# Simulate_Truth <- function(data){
+#   set.seed(111) # use for all rows?
+#   
+#   # voltinism varying by site
+#   if(data$ngen == 1){
+#     gen_ddreq <- 800
+#     gen_relsize = 1
+#     gen_relsprd = 1
+#   }else{
+#     ngen <- data$ngen
+#     gen_ddreq <- seq(600, 1600, length.out = ngen)
+#     gen_relsize <- switch(data$gen_size, 
+#                           "equal" = rep(1, ngen),
+#                           "inc" = seq(1, 2, length.out = ngen),
+#                           "dec" = seq(2, 1, length.out = ngen))
+#     gen_relsprd <- seq(1, 2, length.out = ngen)
+#   }
+#   # simulate phenology for each generation and combine
+#   dflist <- list()
+#   for (g in 1:data$ngen){
+#     df <- Abund_Curve(t = seq(0, 3000, 1)/100, alpha = data$death_rate, 
+#                       beta = gen_relsprd[g] * data$peak_sd / 100, mu = gen_ddreq[g] / 100, sig = 1)
+#     df$Gen <- g
+#     dflist[[g]] <- df
+#   }
+#   dfall <- bind_rows(dflist)
+#   return(dfall)
+# }
 
 
 # data argument is row of parameters
@@ -88,14 +88,16 @@ Simulate_Counts <- function(data, gdd){
     gen_ddreq <- seq(600, 1600, length.out = ngen)
     gen_relsize <- switch(as.character(data$gen_size), 
                           "equal" = rep(1, ngen),
-                          "inc" = seq(1, 2, length.out = ngen),
-                          "dec" = seq(2, 1, length.out = ngen))
+                          "inc" = seq(1, ngen, length.out = ngen),
+                          "dec" = seq(ngen, 1, length.out = ngen))
     gen_relsprd <- seq(1, 2, length.out = ngen)
   }
   # simulate phenology for each generation and combine
   dflist <- list()
   for(site in sites){
-    site_re <- rnorm(1, mean = 0, sd = data$site_mu_sd)
+    # site re includes dependence on latitude, lat of 40 assumed to be baseline
+    site_lat <- gdd$lat[gdd$SiteID == site][1]
+    site_re <- 1000 - site_lat * 25 + rnorm(1, mean = 0, sd = data$site_mu_sd)
     
     for(yr in years){
       year_re <- rnorm(1, mean = 0, sd = data$year_mu_sd)
@@ -122,7 +124,7 @@ Simulate_Counts <- function(data, gdd){
   # counting process
   counts <- dfall %>% 
     group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT, Site_RE, Year_RE) %>% 
-    summarise(RelProp = sum(y * gen_relsize[Gen]),
+    summarise(RelProp = sum(y * gen_relsize[Gen] * ifelse(Gen == data$ngen, ((42 - lat) / 10), 1)),
               DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
     group_by(SiteID, Year) %>% 
     mutate(RelProp = RelProp / sum(RelProp),
@@ -136,6 +138,7 @@ Simulate_Counts <- function(data, gdd){
 
 # accounts for det prob, GAM smoothing
 Adjust_Counts <- function(data, counts){
+  set.seed(data$seed)
   # for GAM, need factors
   counts$SiteYearID <- as.factor(paste(counts$SiteID, counts$Year, sep = "_"))
   counts$SiteID <- as.factor(counts$SiteID)
@@ -168,42 +171,25 @@ Adjust_Counts <- function(data, counts){
     
     if(data$detprob_model %in% c("none", "known")){
       gammod <- safe_gam(adjY ~ 
-                           # SiteID +
-                           # Year +
-                           # s(maxT) +
-                            s(AccumDD, bs = "cc", k = 20) +
-                            s(AccumDD, SiteYearID, bs = "fs", k = 5, m = 1),
-                           # s(AccumDD, bs = "cc", k = 15, by = SiteID) +
-                           # s(AccumDD, bs = "cc", k = 15, by = Year) +
-                           # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
-                           # s(Year, bs = "re", k = 4) +
-                           # s(SiteID, bs = "re", k = 4),
-                            # s(SiteYearID, bs = "re", k = 5),
+                           te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
+                            s(SiteYearID, bs = "re", k = 10),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
                          method = "REML", 
                          optimizer = c("outer", "newton"), 
-                         # gamma = 1.4, 
                          control = list(maxit = 500))
     }
     if(data$detprob_model == "covariate"){
       gammod <- safe_gam(adjY ~ 
                            s(maxT) +
-                           s(AccumDD, bs = "cc", k = 20) +
-                           s(AccumDD, SiteYearID, bs = "fs", k = 5, m = 1),
-                           # s(AccumDD, bs = "cc", k = 15, by = SiteID) +
-                           # s(AccumDD, bs = "cc", k = 15, by = Year) +
-                           # te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
-                           # s(Year, bs = "re", k = 4) +
-                           # s(SiteID, bs = "re", k = 4),
-                           # s(SiteYearID, bs = "re", k = 5),
+                           te(lat, lon, AccumDD, bs = c("tp", "cc"), k = c(4, 30), d = c(2, 1)) +
+                           s(SiteYearID, bs = "re", k = 5),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
                          method = "REML", 
                          optimizer = c("outer", "newton"), 
-                         # gamma = 1.4, 
                          control = list(maxit = 500))
     }
   }
@@ -223,18 +209,20 @@ Adjust_Counts <- function(data, counts){
     #   newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
     # }
     newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
-    newdata$nb_theta <- gammod$result$family$getTheta(TRUE)
-    
+
     if(data$gam_smooth == "interpolate"){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
       adjcounts <- bind_rows(adjcounts, interps)
       adjcounts$gam_flag <- 0
+      adjcounts$nb_theta <- gammod$result$family$getTheta(TRUE)
+      
       return(adjcounts)
     }
     
     if(data$gam_smooth %in% c("preds_4day", "preds_8day")){
       adjcounts <- newdata
       adjcounts$gam_flag <- 0
+      adjcounts$nb_theta <- gammod$result$family$getTheta(TRUE)
       return(adjcounts)
     }
   }else{
@@ -248,7 +236,9 @@ Adjust_Counts <- function(data, counts){
 
 # fit different mixture models, output a list of model results
 # 
-CompareMixMods <- function(dat, mvmax){
+CompareMixMods <- function(dat, mvmax, seed){
+  set.seed(seed) # use for all rows?
+  # print(c(as.character(dat$Year)[1], as.character(dat$SiteID)[1]))
   dd <- dat$AccumDD
   y <- round(dat$adjY)
   dd_dist <- rep(dd, y)

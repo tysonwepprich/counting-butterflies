@@ -31,8 +31,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT) %>% 
@@ -41,6 +41,19 @@ gdd <- left_join(gdd, sites) %>%
   group_by(SiteID, Year) %>% 
   arrange(DOY) %>% 
   mutate(AccumDD = cumsum(degday530))
+
+# remove some sites that are clustered close together
+uniqsites <- gdd %>% ungroup() %>%  dplyr::select(SiteID, lat, lon) %>% distinct()
+
+points_matrix <- as.matrix(dist(uniqsites[, c("lat", "lon")], diag = TRUE, upper = TRUE))
+points_matrix[lower.tri(points_matrix, diag=TRUE)] <- NA
+points_matrix <- points_matrix <= 0.07
+
+v <- colSums(points_matrix, na.rm=TRUE) == 0
+uniqsites <- uniqsites[v, ]
+
+gdd <- gdd %>% 
+  filter(SiteID %in% uniqsites$SiteID)
 
 #####
 # define parameters
@@ -90,9 +103,11 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 
 # for random numbers
 params$seed <- 1:nrow(params)
+params <- params[1:2000, ]
 
 
-done <- list.files('results_0')
+done <- c(list.files('results_0'), list.files('results_1'))
+
 done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
 
 params <- params[-which(params$seed %in% done), ]
@@ -112,16 +127,16 @@ params <- params[-which(params$seed %in% done), ]
 # pops <- counts %>%
 #   group_by(SiteID, Year, M) %>%
 #   summarise(bflydays = sum(Y))
-# # plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = Year, color = Year)) +
-# #   geom_path() +
-# #   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
-# # plt
+# plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = as.factor(Year), color = as.factor(Year))) +
+#   geom_path() +
+#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
+# plt
 # 
 # # GAM interpolation/prediction
 # adjcounts <- Adjust_Counts(data = test, counts)
 # plt <- ggplot(adjcounts, aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
-#   geom_path() +
-#   facet_wrap(~SiteID, ncol = 2, scales = "free_y")
+#   geom_point() +
+#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
 # plt
 # 
 # system.time({
@@ -141,7 +156,8 @@ params <- params[-which(params$seed %in% done), ]
 #          peak_sd == 10, death_rate == 0.6, site_mu_sd == 25, 
 #          year_mu_sd == 50, surv_missing != 0.2)
 
-ncores <- 4
+
+ncores <- 30
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -151,6 +167,7 @@ if(.Platform$OS.type == "unix"){
 }
 
 mainDir <- getwd()
+mcoptions <- list(preschedule = FALSE)
 
 # foreach loop
 outfiles <- foreach(sim = 1:nrow(params),
@@ -160,7 +177,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                                 "Adjust_Counts", "CompareMixMods",
                                 "Simulate_Counts", "Summ_curve",
                                 "Summ_mixmod", "mainDir"),
-                    .inorder = FALSE) %dopar% {
+                    .inorder = FALSE,
+                    .options.multicore = mcoptions) %dopar% {
                       
                       test <- params[sim, ]
                       
@@ -185,10 +203,10 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       results <- adjcounts %>%
                         group_by(SiteID, Year) %>% 
-                        mutate(weeks_obs = length(which(adjY > 0)),
+                        mutate(weeks_obs = length(which(round(adjY) > 0)),
                                total_obs = sum(round(adjY))) %>% 
                         filter(weeks_obs >= 2, total_obs >= 5) %>% 
-                        do(mixmods = CompareMixMods(dat = ., mvmax = (test$ngen + 1)))
+                        do(mixmods = CompareMixMods(dat = ., mvmax = (test$ngen + 1), seed = test$seed))
                       
                       # Extract summary stats for each generation's distribution
                       summ_mods <- results %>% 
@@ -248,7 +266,7 @@ summ_mods <- results %>%
 mods_work <- summ_mods %>% 
   select(SiteID, Year, maxgen, model) %>% 
   distinct()
-mods_all <- expand.grid(1:2, unique(summ_mods$model))
+mods_all <- expand.grid(1:3, unique(summ_mods$model))
 names(mods_all) <- c("maxgen", "model")
 mods_all <- mods_all[complete.cases(mods_all), ]
 
