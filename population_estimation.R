@@ -57,7 +57,7 @@ gdd <- gdd %>%
 
 #####
 # define parameters
-nsite <- c(4, 16, 64) # up to 140 OH sites
+nsite <- c(4, 16) # up to 140 OH sites
 nyear <- c(4, 16) # up to 35 years in Daymet data
 nsurv <- 30
 surv_missing <- c(0, .2, .4) # remove surveys from all counts
@@ -69,7 +69,7 @@ ngen <- c(1:4)
 gen_size <- c("equal", "inc", "dec")
 # volt_flex <- "Y"
 # gen_ddreq <- 600 # depends on ngen
-peak_sd <- c(10, 30) # low and high overlap?
+peak_sd <- c(25, 100) # low and high overlap?
 death_rate <- c(.6, .8) # on weekly rate
 
 # site total population dispersion
@@ -82,8 +82,8 @@ detprob_b2 <- -.01
 detprob_model <- c("known", "covariate", "none")
 
 # site/year variation in mu
-site_mu_sd <- c(25, 50)
-year_mu_sd <- c(25, 50)
+site_mu_sd <- c(10, 50)
+year_mu_sd <- c(10, 50)
 
 # # nonlinear det prob
 # x <- seq(-5, 45, .1)
@@ -103,7 +103,7 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 
 # for random numbers
 params$seed <- 1:nrow(params)
-params <- params[1:2000, ]
+# params <- params[1:2000, ]
 
 
 done <- c(list.files('results_0'), list.files('results_1'))
@@ -171,6 +171,7 @@ mcoptions <- list(preschedule = FALSE)
 
 # foreach loop
 outfiles <- foreach(sim = 1:nrow(params),
+                    .combine='c',
                     .packages= c("mgcv", "dplyr", "tidyr", "purrr",
                                  "lubridate", "mclust", "mixsmsn"),
                     .export = c("params", "gdd", "Abund_Curve", 
@@ -217,8 +218,11 @@ outfiles <- foreach(sim = 1:nrow(params),
                       outlist <- list(test, counts, adjcounts, summ_mods)   
                       saveRDS(object = outlist, file = paste("popest", test$seed, sep = "_"))
                       
-                      rm(test, counts, adjcounts, summ_mods, results)
+                      rm(counts, adjcounts, summ_mods, results, outlist)
                       gc()
+                      
+                      # hope this is the only thing returned
+                      return(test$seed)
                     } # close dopar
 
 
@@ -227,17 +231,68 @@ if(.Platform$OS.type == "windows"){
 }
 
 
-fs <- list.files()
-fs <- fs[grep(pattern = "popest_", x = fs, fixed = TRUE)]
+# with simulation results in hand, next:
+# 1. when is number of generations correct compared to params?
+# 2. what is error in generation weights estimated compared to simulated "truth"?
+# 3. what is error in phenology for each site/year compared to "truth"?
+# 4. what is error in site/year population size compared to "truth" using trapezoid rule?
+
+
+
+fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 
 outlist <- list()
 for (f in fs){
   tmp <- readRDS(f)
-  
-  summ_mods <- results %>% 
+  param <- tmp[[1]]
+  counts <- tmp[[2]]
+  adjcounts <- tmp[[3]]
+  summ_mods <- tmp[[4]]
+  # 1. when is number of generations correct compared to params? 
+  # What others errors, like degenerate modes with redundant mu?
+  # Compare across models for best fit to true ngen, compare within models to see if correct ngen selected
+  true_ngen <- param$ngen
+    
+  mods_work <- summ_mods %>% 
     ungroup() %>% 
+    select(SiteID, Year, maxgen, model) %>% 
+    distinct() %>% 
+    dplyr::filter(complete.cases(.))
+  
+  mods_all <- expand.grid(1:(true_ngen + 1), c("Skew.normal", "Normal", "Skew.t", "t", "Mclust_E", "Mclust_V"))
+  names(mods_all) <- c("maxgen", "model")
+  mods_all <- mods_all[-which(mods_all$maxgen == 1 & mods_all$model == "Mclust_V"), ] 
+  
+  mods_skip <- summ_mods %>% 
+    ungroup() %>% 
+    select(SiteID, Year) %>% 
+    distinct() %>% 
     group_by(SiteID, Year) %>% 
-    do(Summ_mixmod(.))
+    do(., newcols = mods_all) %>% 
+    unnest() %>% 
+    anti_join(mods_work)
+
+  best_mods <- summ_mods %>% 
+    ungroup() %>% 
+    filter(is.na(bic) == FALSE) %>% 
+    mutate(bic = ifelse(bic < 0, -bic, bic)) %>% 
+    group_by(SiteID, Year, model, maxgen) %>%
+    mutate(badmixmod = sum(mixmod_flag, na.rm = TRUE),
+           degenerate = ifelse(length(which((diff(mu, lag = 1) < 50) == TRUE)) == 0, 
+                               rep(0, length(mu)), 
+                               rep(1, length(mu)))) %>%
+    mutate(degenerate = sum(degenerate, na.rm = TRUE)) %>% 
+    filter(badmixmod == 0, degenerate == 0) %>% 
+    group_by(SiteID, Year, model) %>% 
+    # arrange(bic)
+    mutate(within_delta_bic = bic - min(bic),
+           within_delta_aic = aic - min(aic, na.rm = TRUE)) %>% 
+    group_by(SiteID, Year, maxgen) %>% 
+    mutate(among_delta_bic = bic - min(bic),
+           among_delta_aic = aic - min(aic, na.rm = TRUE))
+
+  
+  truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
   
   summ_mods$seed <- stringr::str_split_fixed(string = f, 
                                              pattern = "_", n = 2)[2]
