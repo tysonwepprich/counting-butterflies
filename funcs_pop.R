@@ -35,83 +35,9 @@ Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
   return(df)
 }
 
-# # data argument is row of parameters
-# # this assumes all sites/years have common physiology
-Simulate_Truth <- function(data, counts, gdd){
-  set.seed(data$seed) # use for all rows?
-  # randomly select sites and years to use their coordinates and historical gdd accumulation
-  sites <- unique(counts$SiteID)
-  years <- unique(counts$Year)
-  dddat <- gdd %>% 
-    filter(SiteID %in% sites, Year %in% years) 
-
-  # voltinism varying by site
-  if(data$ngen == 1){
-    gen_ddreq <- 800
-    gen_relsize = 1
-    gen_relsprd = 1
-  }else{
-    ngen <- data$ngen
-    gen_ddreq <- seq(600, 1600, length.out = ngen)
-    gen_relsize <- switch(as.character(data$gen_size), 
-                          "equal" = rep(1, ngen),
-                          "inc" = seq(1, ngen, length.out = ngen),
-                          "dec" = seq(ngen, 1, length.out = ngen))
-    gen_relsprd <- seq(1, 2, length.out = ngen)
-  }
-  # simulate phenology for each generation and combine
-  dflist <- list()
-  for(site in sites){
-    # site re includes dependence on latitude, lat of 40 assumed to be baseline
-    site_lat <- gdd$lat[gdd$SiteID == site][1]
-    site_re <- counts$Site_RE[which(counts$SiteID == site)][1]
-    
-    for(yr in years){
-      year_re <- counts$Year_RE[which(counts$Year == yr)][1]
-      
-      for (g in 1:data$ngen){
-        simdat <- dddat %>% filter(SiteID == site, Year == yr)
-        simt <-  simdat$AccumDD / 100
-        simalpha <- data$death_rate
-        simbeta <- gen_relsprd[g] * data$peak_sd / 100
-        simmu <- (gen_ddreq[g] + site_re + year_re) / 100
-        df <- Abund_Curve(t = simt, alpha = simalpha, 
-                          beta = simbeta, mu = simmu, sig = 1)
-        df <- cbind(data.frame(simdat), df)
-        df$Gen <- g
-        df$Site_RE <- site_re
-        df$Year_RE <- year_re
-        df$gen_weight <- gen_relsize[g] * ifelse(g == data$ngen, ((42 - df$lat) / 3.35), 1)
-        dflist[[length(dflist)+1]] <- df
-      }
-    }
-  }
-  dfall <- bind_rows(dflist) 
-  
-  true_weight <- dfall %>% 
-    group_by(SiteID, SiteDate) %>% 
-    mutate(gen_weight = gen_weight / sum(gen_weight))
-  true_phen <- dfall %>% 
-    ungroup() %>% 
-    group_by(SiteID, Year, Gen) %>% 
-    do(Summ_curve(t = .$AccumDD, y = .$y))
-  true_N <- counts %>% 
-    ungroup() %>% 
-    dplyr::select(SiteID, Year, Site_RE, Year_RE, M) %>% 
-    distinct()
-  
-  truthout <- true_weight %>% 
-    ungroup() %>% 
-    dplyr::select(SiteID, Year, Gen, gen_weight) %>% 
-    distinct() %>% 
-    right_join(true_phen) %>% 
-    right_join(true_N)
-  
-  return(truthout)
-}
-
 
 # data argument is row of parameters
+# output list of counts, truth
 Simulate_Counts <- function(data, gdd){
   set.seed(data$seed) # use for all rows?
   # randomly select sites and years to use their coordinates and historical gdd accumulation
@@ -158,6 +84,7 @@ Simulate_Counts <- function(data, gdd){
         df$Gen <- g
         df$Site_RE <- site_re
         df$Year_RE <- year_re
+        df$gen_weight <- gen_relsize[g] * ifelse(g == data$ngen, ((42 - df$lat) / 3.35), 1)
         dflist[[length(dflist)+1]] <- df
       }
     }
@@ -168,7 +95,7 @@ Simulate_Counts <- function(data, gdd){
   # counting process
   counts <- dfall %>% 
     group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, maxT, Site_RE, Year_RE) %>% 
-    summarise(RelProp = sum(y * gen_relsize[Gen] * ifelse(Gen == data$ngen, ((42 - lat) / 3.35), 1)),
+    summarise(RelProp = sum(y * gen_weight),
               DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
     group_by(SiteID, Year) %>% 
     mutate(RelProp = RelProp / sum(RelProp),
@@ -176,7 +103,29 @@ Simulate_Counts <- function(data, gdd){
            N = rpois(length(RelProp), lambda = RelProp * M),
            Y = rbinom(length(N), size = N, prob = DP)) %>% 
     data.frame()
-  return(counts)
+  
+  # truth
+  true_weight <- dfall %>% 
+    group_by(SiteID, SiteDate) %>% 
+    mutate(gen_weight = gen_weight / sum(gen_weight))
+  true_phen <- dfall %>% 
+    ungroup() %>% 
+    group_by(SiteID, Year, Gen) %>% 
+    do(Summ_curve(t = .$AccumDD, y = .$y))
+  true_N <- counts %>% 
+    ungroup() %>% 
+    dplyr::select(SiteID, Year, Site_RE, Year_RE, M) %>% 
+    distinct()
+  
+  truthout <- true_weight %>% 
+    ungroup() %>% 
+    dplyr::select(SiteID, Year, Gen, gen_weight) %>% 
+    distinct() %>% 
+    right_join(true_phen) %>% 
+    right_join(true_N)
+  
+  out <- list(counts, truthout)
+  return(out)
 }
 
 
@@ -400,8 +349,10 @@ Summ_mixmod <- function(df){
         # mclust param
         modtype <- paste(modtype, mod$result$modelName, sep = "_")
         if(modtype == "Mclust_X") modtype <- "Mclust_E"
+        #calc AIC
         res <- data.frame(mu = mod$result$parameters$mean, sigma2 = mod$result$parameters$variance$sigmasq, shape = NA,
-                          w = mod$result$parameters$pro, nu = NA, aic = NA, bic = mod$result$bic,
+                          w = mod$result$parameters$pro, nu = NA, aic = 2*mod$result$df - 2*mod$result$loglik,
+                          bic = mod$result$bic,
                           edc = NA, icl = NA, model = modtype)
         res <- res %>% arrange(mu)
         rownames(res) <- 1:nrow(res)

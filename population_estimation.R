@@ -31,8 +31,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT) %>% 
@@ -103,7 +103,7 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 
 # for random numbers
 params$seed <- 1:nrow(params)
-# params <- params[1:2000, ]
+params$index <- formatC(params$seed, width=5, flag="0")
 
 
 # 
@@ -190,8 +190,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                       test <- params[sim, ]
                       
                       # make directories to store results
-                      subDir <- paste("results", floor(test$seed / 1000), sep = "_")
-                      
+                      subDir <- paste("results", formatC(floor(test$seed / 1000), width = 2, flag = "0"), sep = "_")
+
                       setwd(mainDir)
                       if (file.exists(subDir)){
                         setwd(file.path(mainDir, subDir))
@@ -202,8 +202,9 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       
                       
-                      counts <- Simulate_Counts(data = test, gdd = gdd)
-                      
+                      simpop <- Simulate_Counts(data = test, gdd = gdd)
+                      counts <- simpop[[1]]
+                      truth <- simpop[[2]]
                       # GAM interpolation/prediction
                       adjcounts <- Adjust_Counts(data = test, counts)
                       
@@ -221,10 +222,10 @@ outfiles <- foreach(sim = 1:nrow(params),
                         group_by(SiteID, Year) %>% 
                         do(Summ_mixmod(.))
                       
-                      outlist <- list(test, counts, adjcounts, summ_mods)   
-                      saveRDS(object = outlist, file = paste("popest", test$seed, sep = "_"))
+                      outlist <- list(test, counts, adjcounts, summ_mods, truth)   
+                      saveRDS(object = outlist, file = paste("popest", test$index, sep = "_"))
                       
-                      rm(counts, adjcounts, summ_mods, results, outlist)
+                      rm(counts, adjcounts, summ_mods, results, outlist, simpop, truth)
                       gc()
                       
                       # hope this is the only thing returned
@@ -243,7 +244,7 @@ if(.Platform$OS.type == "windows"){
 # 3. what is error in phenology for each site/year compared to "truth"?
 # 4. what is error in site/year population size compared to "truth" using trapezoid rule?
 
-
+# NB: not all mixture model problems filtered out, like sigma2 close to zero to create a peak for one count
 
 fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 
@@ -298,7 +299,7 @@ for (f in fs){
     #        among_delta_aic = aic - min(aic, na.rm = TRUE))
 
   
-  truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
+  # truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
   
   summ_mods$seed <- stringr::str_split_fixed(string = f, 
                                              pattern = "_", n = 2)[2]
