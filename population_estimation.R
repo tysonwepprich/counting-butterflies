@@ -104,13 +104,19 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 # for random numbers
 params$seed <- 1:nrow(params)
 # params <- params[1:2000, ]
+# rerun to fix gen_weight issue for ngen > 1
+params <- params[-which(params$ngen == 1), ]
 
-
-done <- c(list.files('results_0'), list.files('results_1'))
-
-done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
-
-params <- params[-which(params$seed %in% done), ]
+# 
+# fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
+# details <- file.info(fs)
+# done <- fs[which((ymd_hms(details$mtime) - ymd_hms(Sys.time())) > -100)]
+# 
+# # done <- c(list.files('results_0'), list.files('results_1'))
+# 
+# done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
+# 
+# params <- params[-which(params$seed %in% done), ]
 ######
 # analysis workflow
 
@@ -157,7 +163,7 @@ params <- params[-which(params$seed %in% done), ]
 #          year_mu_sd == 50, surv_missing != 0.2)
 
 
-ncores <- 30
+ncores <- 36
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
