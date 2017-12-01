@@ -31,8 +31,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT) %>% 
@@ -103,14 +103,14 @@ params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpo
 
 # for random numbers
 params$seed <- 1:nrow(params)
-# params <- params[1:2000, ]
-
-
-done <- c(list.files('results_0'), list.files('results_1'))
-
-done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
-
-params <- params[-which(params$seed %in% done), ]
+params <- params[c(1, 1000, 2000, 3000, 4000, 5000), ]
+# 
+# 
+# done <- c(list.files('results_0'), list.files('results_1'))
+# 
+# done <- as.numeric(stringr::str_split_fixed(string = done, pattern = "_", n = 2)[,2])
+# 
+# params <- params[-which(params$seed %in% done), ]
 ######
 # analysis workflow
 
@@ -157,7 +157,7 @@ params <- params[-which(params$seed %in% done), ]
 #          year_mu_sd == 50, surv_missing != 0.2)
 
 
-ncores <- 30
+ncores <- 6
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -282,20 +282,24 @@ for (f in fs){
                                rep(0, length(mu)), 
                                rep(1, length(mu)))) %>%
     mutate(degenerate = sum(degenerate, na.rm = TRUE)) %>% 
-    filter(badmixmod == 0, degenerate == 0) %>% 
-    group_by(SiteID, Year, model) %>% 
-    # arrange(bic)
-    mutate(within_delta_bic = bic - min(bic),
-           within_delta_aic = aic - min(aic, na.rm = TRUE)) %>% 
-    group_by(SiteID, Year, maxgen) %>% 
-    mutate(among_delta_bic = bic - min(bic),
-           among_delta_aic = aic - min(aic, na.rm = TRUE))
+    filter(badmixmod == 0, degenerate == 0) #%>% 
+    # group_by(SiteID, Year, model) %>% 
+    # # arrange(bic)
+    # mutate(within_delta_bic = bic - min(bic),
+    #        within_delta_aic = aic - min(aic, na.rm = TRUE)) %>% 
+    # group_by(SiteID, Year, maxgen) %>% 
+    # mutate(among_delta_bic = bic - min(bic),
+    #        among_delta_aic = aic - min(aic, na.rm = TRUE))
 
   
   truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
   
   summ_mods$seed <- stringr::str_split_fixed(string = f, 
                                              pattern = "_", n = 2)[2]
+  
+  
+  
+  
   outlist[[length(outlist)+1]] <- summ_mods
 }
 res <- bind_rows(outlist)
