@@ -69,8 +69,9 @@ ngen <- c(1:4)
 gen_size <- c("equal", "inc", "dec")
 # volt_flex <- "Y"
 # gen_ddreq <- 600 # depends on ngen
-peak_sd <- c(25, 100) # low and high overlap?
-death_rate <- c(.6, .8) # on weekly rate
+peak_sd <- c(25, 75) # low and high overlap?
+death_rate <- c(.005, .0075) # on degree day rate
+# peak_sd * death_rate needs to be < 1 for positive beta parameters
 
 # site total population dispersion
 negbin_mu <- 100

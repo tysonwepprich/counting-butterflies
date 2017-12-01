@@ -60,7 +60,7 @@ Simulate_Counts <- function(data, gdd){
                           "equal" = rep(1, ngen),
                           "inc" = seq(1, ngen, length.out = ngen),
                           "dec" = seq(ngen, 1, length.out = ngen))
-    gen_relsprd <- seq(1, 2, length.out = ngen)
+    gen_relsprd <- seq(1, 1.5, length.out = ngen)
   }
   # simulate phenology for each generation and combine
   dflist <- list()
@@ -74,10 +74,10 @@ Simulate_Counts <- function(data, gdd){
       
       for (g in 1:data$ngen){
         simdat <- dddat %>% filter(SiteID == site, Year == yr)
-        simt <-  simdat$AccumDD / 100
+        simt <-  simdat$AccumDD
         simalpha <- data$death_rate
-        simbeta <- gen_relsprd[g] * data$peak_sd / 100
-        simmu <- (gen_ddreq[g] + site_re + year_re) / 100
+        simbeta <- gen_relsprd[g] * data$peak_sd
+        simmu <- (gen_ddreq[g] + site_re + year_re)
         df <- Abund_Curve(t = simt, alpha = simalpha, 
                           beta = simbeta, mu = simmu, sig = 1)
         df <- cbind(data.frame(simdat), df)
