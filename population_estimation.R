@@ -163,7 +163,7 @@ params$index <- formatC(params$seed, width=5, flag="0")
 #          year_mu_sd == 50, surv_missing != 0.2)
 
 
-ncores <- 36
+ncores <- 40
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
