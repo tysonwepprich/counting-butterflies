@@ -162,8 +162,9 @@ params$index <- formatC(params$seed, width=5, flag="0")
 #   filter(nsite == 4, nyear == 4, ngen == 2, gen_size == "equal",
 #          peak_sd == 10, death_rate == 0.6, site_mu_sd == 25, 
 #          year_mu_sd == 50, surv_missing != 0.2)
-
-
+#####
+# Simulation
+#####
 ncores <- 40
 
 if(.Platform$OS.type == "unix"){
@@ -237,10 +238,18 @@ outfiles <- foreach(sim = 1:nrow(params),
 if(.Platform$OS.type == "windows"){
   stopCluster(cl)
 }
-
+#####
+# Summarize results
+#####
+# Expect ngen to be wrong when last generation weight falls lower.
+# Many mixture models fail to fit, how to include or account for these?
 
 # with simulation results in hand, next:
 # 1. when is number of generations correct compared to params?
+# For each SiteYear: model, maxgen, AIC/BIC, fit fails, other errors, last gen weight, # counts, smoothing
+# Correct maxgen, mixture models "work" as responses
+
+
 # 2. what is error in generation weights estimated compared to simulated "truth"?
 # 3. what is error in phenology for each site/year compared to "truth"?
 # 4. what is error in site/year population size compared to "truth" using trapezoid rule?
@@ -256,6 +265,8 @@ for (f in fs){
   counts <- tmp[[2]]
   adjcounts <- tmp[[3]]
   summ_mods <- tmp[[4]]
+  truth <- tmp[[5]]
+  
   # 1. when is number of generations correct compared to params? 
   # What others errors, like degenerate modes with redundant mu?
   # Compare across models for best fit to true ngen, compare within models to see if correct ngen selected
@@ -283,23 +294,30 @@ for (f in fs){
   best_mods <- summ_mods %>% 
     ungroup() %>% 
     filter(is.na(bic) == FALSE) %>% 
-    mutate(bic = ifelse(bic < 0, -bic, bic)) %>% 
+    mutate(bic = ifelse(bic < 0 & model %in% c("Mclust_E", "Mclust_V"), -bic, bic)) %>% 
     group_by(SiteID, Year, model, maxgen) %>%
     mutate(badmixmod = sum(mixmod_flag, na.rm = TRUE),
-           degenerate = ifelse(length(which((diff(mu, lag = 1) < 50) == TRUE)) == 0, 
-                               rep(0, length(mu)), 
-                               rep(1, length(mu)))) %>%
-    mutate(degenerate = sum(degenerate, na.rm = TRUE)) %>% 
-    filter(badmixmod == 0, degenerate == 0) #%>% 
-    # group_by(SiteID, Year, model) %>% 
-    # # arrange(bic)
-    # mutate(within_delta_bic = bic - min(bic),
-    #        within_delta_aic = aic - min(aic, na.rm = TRUE)) %>% 
-    # group_by(SiteID, Year, maxgen) %>% 
-    # mutate(among_delta_bic = bic - min(bic),
-    #        among_delta_aic = aic - min(aic, na.rm = TRUE))
+           redundant = ifelse(maxgen > 1, min(diff(mu, lag = 1), na.rm = TRUE), NA),
+           nearzerosigma = min(sigma2, na.rm = TRUE)) %>%
+    filter(badmixmod == 0, nearzerosigma > 100) %>% 
+    group_by(SiteID, Year, model) %>%
+    mutate(within_model_bic = bic - min(bic, na.rm = TRUE),
+           within_model_aic = aic - min(aic, na.rm = TRUE)) %>%
+    group_by(SiteID, Year, maxgen) %>%
+    mutate(within_maxgen_bic = bic - min(bic, na.rm = TRUE),
+           within_maxgen_aic = aic - min(aic, na.rm = TRUE)) %>% 
+    ungroup() %>% 
+    mutate(right_ngen = ifelse(maxgen == true_ngen, "yes", "no")) %>% 
+    distinct() # removes duplicated mclust_E for ngen == 1
 
-  
+  bestest <- best_mods %>% 
+    group_by(model) %>% 
+    filter(right_ngen == "yes") %>% 
+    summarise(meanaic = mean(within_maxgen_aic),
+              meanaicngen = mean(within_model_aic),
+              n = length(unique(SiteID, Year)),
+              right = length(which(within_model_aic == 0)),
+              best = length(which(within_maxgen_aic == 0)))
   # truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
   
   summ_mods$seed <- stringr::str_split_fixed(string = f, 
