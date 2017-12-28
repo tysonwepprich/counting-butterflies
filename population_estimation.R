@@ -31,16 +31,33 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
-  dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT) %>% 
+  dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
   mutate(Year = year(SiteDate),
          DOY = yday(SiteDate)) %>% 
   group_by(SiteID, Year) %>% 
   arrange(DOY) %>% 
   mutate(AccumDD = cumsum(degday530))
+
+siteGDD <- gdd %>%
+  group_by(SiteID, lat, lon) %>% 
+  filter(DOY == 365) %>%
+  summarise(meanGDD = mean(AccumDD))
+sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 1:4, modelNames = "EEV")
+# sites$region9 <- as.character(sitemod$classification)
+# sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 4)
+siteGDD$region <- as.character(sitemod$classification)
+# # visualize regional clusters
+# a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
+# a
+
+siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
+                                 to = c("NE", "NW", "CN", "SW"))
+gdd <- gdd %>% 
+  left_join(siteGDD[, c("SiteID", "region")])
 
 # remove some sites that are clustered close together
 uniqsites <- gdd %>% ungroup() %>%  dplyr::select(SiteID, lat, lon) %>% distinct()
@@ -55,27 +72,35 @@ uniqsites <- uniqsites[v, ]
 gdd <- gdd %>% 
   filter(SiteID %in% uniqsites$SiteID)
 
+# Point out that DOY and GDD are highly correlated in spring/summer, less so in fall 
+# gdd %>% group_by(month(SiteDate), region) %>% 
+# summarise(corr = cor(DOY, AccumDD)) %>% data.frame()
+
+
+
 #####
 # define parameters
-nsite <- c(4, 16) # up to 140 OH sites
-nyear <- c(4, 16) # up to 35 years in Daymet data
+nsite <- 40 # up to 140 OH sites
+nyear <- 5 # up to 35 years in Daymet data
 nsurv <- 30
 surv_missing <- c(0, .2, .4) # remove surveys from all counts
 # site_missing <- .2 # turnover across years
 # group_struct <- c("all", "site", "year", "siteyear")
+gam_scale <- c("DOY", "GDD")
 gam_smooth <- c("none", "interpolate", "preds_8day", "preds_4day")
 
 ngen <- c(1:4)
-gen_size <- c("equal", "inc", "dec")
+gen_size <- "equal"  #c("equal", "inc", "dec")
 # volt_flex <- "Y"
 # gen_ddreq <- 600 # depends on ngen
-peak_sd <- c(25, 75) # low and high overlap?
+peak_sd <- 25 # 75 might be too much... c(25, 75) # low and high overlap?
 death_rate <- c(.005, .0075) # on degree day rate
 # peak_sd * death_rate needs to be < 1 for positive beta parameters
 
 # site total population dispersion
-negbin_mu <- 100
-negbin_disp <- 1
+# negbin_mu <- 100
+# negbin_disp <- 1
+pois_lam <- c(100, 500, 1000)
 # detection probability parameters (logit scale)
 detprob_b0 <- -7
 detprob_b1 <- .6
@@ -83,23 +108,27 @@ detprob_b2 <- -.01
 detprob_model <- c("known", "covariate", "none")
 
 # site/year variation in mu
-site_mu_sd <- c(10, 50)
-year_mu_sd <- c(10, 50)
+site_mu_sd <- 50
+year_mu_sd <- 50
+
+# mixmod choices
+mixmod <- c("hom", "het", "skew")
 
 # # nonlinear det prob
 # x <- seq(-5, 45, .1)
 # y <- plogis(-10 + x * .6 + -.01 * x^2)
 # plot(x, y)
 
-params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, 
+params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_missing, gam_scale = gam_scale,
                gam_smooth = gam_smooth, ngen = ngen, gen_size = gen_size, peak_sd = peak_sd, 
-               death_rate = death_rate, negbin_mu = negbin_mu, negbin_disp = negbin_disp, 
+               death_rate = death_rate, pois_lam = pois_lam, 
                detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2, 
-               detprob_model = detprob_model, site_mu_sd = site_mu_sd, year_mu_sd = year_mu_sd)
+               detprob_model = detprob_model, site_mu_sd = site_mu_sd, year_mu_sd = year_mu_sd,
+               mixmod = mixmod)
 params <- expand.grid(params)
 
 # some parameter combinations don't make sense, try to exclude to save time
-params <- params[-which(params$ngen == 1 & params$gen_size %in% c("inc", "dec")), ]
+params <- params[-which(params$ngen == 1 & params$mixmod == "het"), ]
 params <- params[-which(params$surv_missing == 0 & params$gam_smooth == "interpolate"), ]
 
 # for random numbers
@@ -107,6 +136,7 @@ params$seed <- 1:nrow(params)
 params$index <- formatC(params$seed, width=5, flag="0")
 
 
+params <- params[c(500), ]
 # 
 # fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 # details <- file.info(fs)
@@ -134,17 +164,17 @@ params$index <- formatC(params$seed, width=5, flag="0")
 # pops <- counts %>%
 #   group_by(SiteID, Year, M) %>%
 #   summarise(bflydays = sum(Y))
-# plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = as.factor(Year), color = as.factor(Year))) +
-#   geom_path() +
-#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
-# plt
+plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = as.factor(Year), color = as.factor(Year))) +
+  geom_path() +
+  facet_wrap(~SiteID, ncol = 4, scales = "free_y")
+plt
 # 
 # # GAM interpolation/prediction
 # adjcounts <- Adjust_Counts(data = test, counts)
-# plt <- ggplot(adjcounts, aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
-#   geom_point() +
-#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
-# plt
+plt <- ggplot(adjcounts, aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
+  geom_point() +
+  facet_wrap(~SiteID, ncol = 4, scales = "free_y")
+plt
 # 
 # system.time({
 #   results <- adjcounts %>%
@@ -165,7 +195,7 @@ params$index <- formatC(params$seed, width=5, flag="0")
 #####
 # Simulation
 #####
-ncores <- 40
+ncores <- 6
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -189,7 +219,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                     .inorder = FALSE,
                     .options.multicore = mcoptions) %dopar% {
                       
-                      test <- params[sim, ]
+                      param <- params[sim, ]
                       
                       # make directories to store results
                       subDir <- paste("results", formatC(floor(test$seed / 1000), width = 2, flag = "0"), sep = "_")
@@ -204,30 +234,43 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       
                       
-                      simpop <- Simulate_Counts(data = test, gdd = gdd)
+                      simpop <- Simulate_Counts(data = param, gdd = gdd)
                       counts <- simpop[[1]]
                       truth <- simpop[[2]]
                       # GAM interpolation/prediction
-                      adjcounts <- Adjust_Counts(data = test, counts)
+                      adjcounts <- Adjust_Counts(data = param, counts)
                       
-                      
+                      # Do regional mixture models, pooling years/sites
                       results <- adjcounts %>%
-                        group_by(SiteID, Year) %>% 
-                        mutate(weeks_obs = length(which(round(adjY) > 0)),
-                               total_obs = sum(round(adjY))) %>% 
-                        filter(weeks_obs >= 2, total_obs >= 5) %>% 
-                        do(mixmods = CompareMixMods(dat = ., mvmax = (test$ngen + 1), seed = test$seed))
+                        group_by(region) %>% 
+                        # mutate(weeks_obs = length(which(round(adjY) > 0)),
+                               # total_obs = sum(round(adjY))) %>% 
+                        # filter(weeks_obs >= 2, total_obs >= 5) %>% 
+                        do(mixmods = CompareMixMods(dat = ., param = param))
                       
-                      # Extract summary stats for each generation's distribution
-                      summ_mods <- results %>% 
-                        ungroup() %>% 
-                        group_by(SiteID, Year) %>% 
-                        do(Summ_mixmod(.))
+                      # This df could be used to see if BIC/AIC choose right number of gen
+                      genright <- results %>% 
+                        do(rightgen = RightNumGen(.$mixmods, param = param)) %>% 
+                        unnest()
                       
-                      outlist <- list(test, counts, adjcounts, summ_mods, truth)   
+                      # regroup generation assignments by SiteYear
+                      siteresults <- results %>%
+                        do(GenClass = AssignGeneration(mixmod = .$mixmods, 
+                                                       dat = adjcounts, 
+                                                       param = param,
+                                                       reg = .$region)) %>% 
+                        unnest()
+                      
+                      # # Extract summary stats for each generation's distribution
+                      # summ_mods <- results %>% 
+                      #   ungroup() %>% 
+                      #   group_by(region) %>% 
+                      #   do(Summ_mixmod(.))
+                      
+                      outlist <- list(param, counts, adjcounts, truth, genright, siteresults)   
                       saveRDS(object = outlist, file = paste("popest", test$index, sep = "_"))
                       
-                      rm(counts, adjcounts, summ_mods, results, outlist, simpop, truth)
+                      rm(counts, adjcounts, summ_mods, results, outlist, simpop, truth, genright, siteresults)
                       gc()
                       
                       # hope this is the only thing returned
@@ -313,12 +356,38 @@ for (f in fs){
   bestest <- best_mods %>% 
     group_by(model) %>% 
     filter(right_ngen == "yes") %>% 
+    dplyr::select(SiteID, Year, model, within_maxgen_aic, within_maxgen_bic, within_model_aic,
+                  within_model_bic) %>% 
+    distinct() %>% 
     summarise(meanaic = mean(within_maxgen_aic),
+              meanbic = mean(within_maxgen_bic),
               meanaicngen = mean(within_model_aic),
-              n = length(unique(SiteID, Year)),
-              right = length(which(within_model_aic == 0)),
-              best = length(which(within_maxgen_aic == 0)))
-  # truth <- Simulate_Truth(data = param, counts = counts, gdd = gdd)
+              meanbicngen = mean(within_model_bic),
+              n = length(unique(paste0(SiteID, Year))),
+              rightaic = length(which(within_model_aic == 0)),
+              rightbic = length(which(within_model_bic == 0)),
+              bestaic = length(which(within_maxgen_aic == 0)),
+              bestbic = length(which(within_maxgen_bic == 0)))
+
+  # plot to assess model selection of ngen vs siteYear N and weight of last gen
+  plot_best <- truth %>% 
+    filter(Gen == true_ngen) %>% 
+    mutate(SiteID = as.factor(SiteID),
+           Year = as.factor(as.character(Year))) %>% 
+    dplyr::select(SiteID, Year, gen_weight, M) %>% 
+    right_join(best_mods) %>% 
+    group_by(SiteID, Year, model) %>% 
+    filter(within_model_bic == 0) %>% 
+    dplyr::select(SiteID, Year, model, gen, gen_weight, M, maxgen, w) %>% 
+    filter(gen == maxgen) %>% 
+    distinct()
+  
+  plt <- ggplot(plot_best, aes(x = M, y = gen_weight, color = as.factor(maxgen))) +
+    geom_point() +
+    theme_bw() +
+    facet_wrap(~model, ncol = 3)
+  plt
+  
   
   summ_mods$seed <- stringr::str_split_fixed(string = f, 
                                              pattern = "_", n = 2)[2]
