@@ -153,9 +153,14 @@ Adjust_Counts <- function(data, counts){
   
   # counts were simulated each day, reduce to every 4 days
   counts_4day <- counts %>% 
-    filter(DOY %in% (seq(90, 294, 4) + sample.int(n=3, size=52, replace=TRUE)))
+    group_by(SiteYearID) %>% 
+    filter(DOY %in% (seq(90, 294, 4) + sample.int(n=3, size=52, replace=TRUE))) %>% 
+    ungroup()
   
-  counts_8day <- counts_4day[seq(1, nrow(counts_4day), 2), ]
+  counts_8day <- counts_4day %>% 
+    group_by(SiteYearID) %>% 
+    slice(seq(1, length(DOY), 2)) %>% 
+    ungroup()
 
   adjcounts <- counts_8day %>% 
     sample_frac(size = 1 - data$surv_missing) %>% 
