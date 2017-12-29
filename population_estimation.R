@@ -113,6 +113,7 @@ year_mu_sd <- 50
 
 # mixmod choices
 mixmod <- c("hom", "het", "skew")
+mod_region <- c("ALL", "reg4")
 
 # # nonlinear det prob
 # x <- seq(-5, 45, .1)
@@ -124,7 +125,7 @@ params <- list(nsite = nsite, nyear = nyear, nsurv = nsurv, surv_missing = surv_
                death_rate = death_rate, pois_lam = pois_lam, 
                detprob_b0 = detprob_b0, detprob_b1 = detprob_b1, detprob_b2 = detprob_b2, 
                detprob_model = detprob_model, site_mu_sd = site_mu_sd, year_mu_sd = year_mu_sd,
-               mixmod = mixmod)
+               mixmod = mixmod, mod_region = mod_region)
 params <- expand.grid(params)
 
 # some parameter combinations don't make sense, try to exclude to save time
@@ -136,7 +137,7 @@ params$seed <- 1:nrow(params)
 params$index <- formatC(params$seed, width=5, flag="0")
 
 
-params <- params[c(500), ]
+# params <- params[c(1, 2001, 2501, 3001, 3501, 4001), ]
 # 
 # fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 # details <- file.info(fs)
@@ -171,7 +172,7 @@ plt
 # 
 # # GAM interpolation/prediction
 # adjcounts <- Adjust_Counts(data = test, counts)
-plt <- ggplot(adjcounts, aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
+plt <- ggplot(adjcounts, aes(x = DOY, y = adjY, group = Year, color = Year)) +
   geom_point() +
   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
 plt
@@ -222,7 +223,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                       param <- params[sim, ]
                       
                       # make directories to store results
-                      subDir <- paste("results", formatC(floor(test$seed / 1000), width = 2, flag = "0"), sep = "_")
+                      subDir <- paste("results", 
+                                      formatC(floor(param$seed / 1000), width = 2, flag = "0"), sep = "_")
 
                       setwd(mainDir)
                       if (file.exists(subDir)){
@@ -241,6 +243,10 @@ outfiles <- foreach(sim = 1:nrow(params),
                       adjcounts <- Adjust_Counts(data = param, counts)
                       
                       # Do regional mixture models, pooling years/sites
+                      # Also try statewide
+                      if (param$mod_region == "ALL"){
+                        adjcounts$region <- "ALL"
+                      }
                       results <- adjcounts %>%
                         group_by(region) %>% 
                         # mutate(weeks_obs = length(which(round(adjY) > 0)),
@@ -250,7 +256,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       # This df could be used to see if BIC/AIC choose right number of gen
                       genright <- results %>% 
-                        do(rightgen = RightNumGen(.$mixmods, param = param)) %>% 
+                        do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region)) %>% 
                         unnest()
                       
                       # regroup generation assignments by SiteYear
@@ -268,13 +274,13 @@ outfiles <- foreach(sim = 1:nrow(params),
                       #   do(Summ_mixmod(.))
                       
                       outlist <- list(param, counts, adjcounts, truth, genright, siteresults)   
-                      saveRDS(object = outlist, file = paste("popest", test$index, sep = "_"))
+                      saveRDS(object = outlist, file = paste("popest", param$index, sep = "_"))
                       
                       rm(counts, adjcounts, summ_mods, results, outlist, simpop, truth, genright, siteresults)
                       gc()
                       
                       # hope this is the only thing returned
-                      return(test$seed)
+                      return(param$seed)
                     } # close dopar
 
 
@@ -307,8 +313,9 @@ for (f in fs){
   param <- tmp[[1]]
   counts <- tmp[[2]]
   adjcounts <- tmp[[3]]
-  summ_mods <- tmp[[4]]
-  truth <- tmp[[5]]
+  truth <- tmp[[4]]
+  genright <- tmp[[5]]
+  siteresults <- tmp[[6]]
   
   # 1. when is number of generations correct compared to params? 
   # What others errors, like degenerate modes with redundant mu?

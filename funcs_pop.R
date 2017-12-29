@@ -216,34 +216,35 @@ Adjust_Counts <- function(data, counts){
     #   newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
     # }
     
-    # mod <- gammod$result
+    mod <- gammod$result
     summod <- summary(gammod$result)
 
     # # prediction with response, gives non-integers which makes mixmod harder
-    newdata$adjY <- round(predict(gammod$result, newdata = newdata, type = "response"))
-    # 
-    # # prediction with simulated counts, stochastic but integers (if n is odd)
-    # Xp <- predict.gam(object = mod, newdata = newdata, type="lpmatrix") ## map coefs to fitted curves
-    # beta <- coef(mod)
-    # Vb   <- vcov(mod) ## posterior mean and cov of coefs
-    # n <- 101 # choose number of simulations
-    # mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
-    # ilink <- family(mod)$linkinv
-    # linklppreds <- Xp %*% t(mrand)
-    # nbpreds <- apply(X = linklppreds, 
-    #                  MARGIN = 1, 
-    #                  FUN = function(x){
-    #                    # temp <- sort(x)
-    #                    # bounds <- quantile(1:n, probs = c(0.025, 0.975))
-    #                    # x <- temp[bounds[1]:bounds[2]]
-    #                    x <- ilink(x)
-    #                    x <- rnbinom(n = length(x),
-    #                                 mu = x,
-    #                                 size = mod$family$getTheta(TRUE))
-    #                    x <- quantile(x, .5)
-    #                    return(x)
-    #                  })
+    # adjY <- predict(gammod$result, newdata = newdata, type = "response")
 
+    # prediction with simulated counts, stochastic but integers (if n is odd)
+    Xp <- predict.gam(object = mod, newdata = newdata, type="lpmatrix") ## map coefs to fitted curves
+    beta <- coef(mod)
+    Vb   <- vcov(mod) ## posterior mean and cov of coefs
+    n <- 5 # choose number of simulations
+    mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+    ilink <- family(mod)$linkinv
+    linklppreds <- Xp %*% t(mrand)
+    nbpreds <- apply(X = linklppreds,
+                     MARGIN = 1,
+                     FUN = function(x){
+                       # temp <- sort(x)
+                       # bounds <- quantile(1:n, probs = c(0.025, 0.975))
+                       # x <- temp[bounds[1]:bounds[2]]
+                       x <- ilink(x)
+                       x <- rnbinom(n = length(x),
+                                    mu = x,
+                                    size = mod$family$getTheta(TRUE))
+                       x <- quantile(x, .5)
+                       return(x)
+                     })
+    newdata$adjY <- nbpreds
+    
     if(data$gam_smooth == "interpolate"){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
       adjcounts <- bind_rows(adjcounts, interps)
@@ -276,7 +277,7 @@ CompareMixMods <- function(dat, param){
   set.seed(param$seed) # use for all rows?
   # print(c(as.character(dat$Year)[1], as.character(dat$SiteID)[1]))
   dd <- dat$Timescale
-  y <- dat$adjY
+  y <- round(dat$adjY)
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
@@ -384,13 +385,16 @@ CompareMixMods <- function(dat, param){
   return(out)
 }
   
-RightNumGen <- function(mixmods, param){
+RightNumGen <- function(mixmods, param, reg){
   test <- Summ_mixmod(mixmods)
+  
+  # problem with model classes
+  test$model <- param$mixmod
   
   best_mods <- test %>% 
     ungroup() %>% 
     filter(is.na(bic) == FALSE) %>% 
-    mutate(bic = ifelse(bic < 0 & model %in% c("Mclust_E", "Mclust_V"), -bic, bic)) %>% 
+    mutate(bic = ifelse(bic < 0 & model %in% c("hom", "het"), -bic, bic)) %>% 
     group_by(model, maxgen) %>%
     mutate(badmixmod = sum(mixmod_flag, na.rm = TRUE),
            redundant = ifelse(maxgen > 1, min(diff(mu, lag = 1), na.rm = TRUE), NA),
@@ -400,7 +404,8 @@ RightNumGen <- function(mixmods, param){
     mutate(within_model_bic = bic - min(bic, na.rm = TRUE),
            within_model_aic = aic - min(aic, na.rm = TRUE)) %>%
     ungroup() %>% 
-    mutate(right_ngen = ifelse(maxgen == param$ngen, "yes", "no")) %>% 
+    mutate(right_ngen = ifelse(maxgen == param$ngen, "yes", "no"),
+           region = reg) %>% 
     distinct()
   
   return(best_mods)
@@ -503,68 +508,73 @@ AssignGeneration <- function(mixmod, dat, param, reg){
   set.seed(param$seed) # use for all rows?
   dat <- dat %>%
     filter(region == reg)
-  y <- dat$adjY
+  y <- round(dat$adjY)
   
   # df to be combined with generation classifications at the end
-  dat$index <- 1:nrow(dat)
+  dat$row <- 1:nrow(dat)
   outdf <- dat[, c("SiteID", "SiteDate", "Timescale")]
-  outdf <- outdf[rep(dat$index, y), ]
+  outdf <- outdf[rep(dat$row, y), ]
   
-  ngen <- param$ngen
-  
-  allmods <- flatten(mixmod)
-  alldf <- list()
-  # only use model with correct ngen
-  mod <- allmods[[ngen]]
-  if(is.null(mod$error) && !is.null(mod$result)){
-    modtype <- attr(mod$result, "class")
-    if(modtype == "Mclust"){
-      # mclust param
-      modtype <- paste(modtype, mod$result$modelName, sep = "_")
-      if(modtype == "Mclust_X") modtype <- "Mclust_E"
-      # assign generations
-      res <- mod$result$z
-      quickclass <- function(x){rmultinom(n = 1, size = 1, prob = x)}
-      resclass <- apply(X = res, MARGIN = 1, FUN = quickclass)
-      resclass <- data.frame(t(resclass))
-      names(resclass) <- paste("gen", 1:ncol(resclass), sep = "_")
-      outclass <- cbind(outdf, resclass) %>% 
-        tidyr::gather(key = gen, value = count, contains("gen")) %>% 
-        mutate(gen = stringr::str_split_fixed(gen, pattern = "_", n = 2)[, 2],
+  outlist <- list()
+  for (ngen in 1:(param$ngen + 1)){
+    if(ngen == 1){
+      outclass <- outdf %>% 
+        mutate(gen = 1,
+               count = 1,
                year = lubridate::year(SiteDate)) %>% 
         filter(count > 0) %>% 
-        group_by(SiteID, year, gen) %>% 
-        do(SiteYearSumm = Summ_curve(t = .$Timescale, y = .$count)) %>% 
-        unnest() %>% 
         mutate(region = reg, 
                index = param$index)
       
-    }else if(modtype == "skew"){
-      # mixsmsn
-      res <- mod$result$z
-      quickclass <- function(x){rmultinom(n = 1, size = 1, prob = x)}
-      resclass <- apply(X = res, MARGIN = 1, FUN = quickclass)
-      resclass <- data.frame(t(resclass))
-      names(resclass) <- paste("gen", 1:ncol(resclass), sep = "_")
-      outclass <- cbind(outdf, resclass) %>% 
-        tidyr::gather(key = gen, value = count, contains("gen")) %>% 
-        mutate(gen = stringr::str_split_fixed(gen, pattern = "_", n = 2)[, 2],
-               year = lubridate::year(SiteDate)) %>% 
-        filter(count > 0) %>% 
-        group_by(SiteID, year, gen) %>% 
-        do(SiteYearSumm = Summ_curve(t = .$Timescale, y = .$count)) %>% 
-        unnest() %>% 
-        mutate(region = reg, 
-               index = param$index)
     }else{
-      # error statement
-      outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
-                             curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+      
+      allmods <- flatten(mixmod)
+      # only use model with correct ngen
+      mod <- allmods[[ngen]]
+      if(is.null(mod$error) && !is.null(mod$result)){
+        modtype <- attr(mod$result, "class")
+        if(modtype == "Mclust"){
+          # assign generations
+          res <- as.data.frame(mod$result$z)
+          quickclass <- function(x){rmultinom(n = 1, size = 1, prob = x)}
+          resclass <- apply(X = res, MARGIN = 1, FUN = quickclass)
+          resclass <- data.frame(t(resclass))
+          names(resclass) <- paste("gen", rank(mod$result$parameters$mean), sep = "_")
+          outclass <- cbind(outdf, resclass) %>% 
+            tidyr::gather(key = gen, value = count, contains("gen")) %>% 
+            mutate(gen = as.numeric(stringr::str_split_fixed(gen, pattern = "_", n = 2)[, 2]),
+                   year = lubridate::year(SiteDate)) %>% 
+            filter(count > 0) %>% 
+            mutate(region = reg, 
+                   index = param$index)
+          
+        }else if(modtype == "Skew.normal"){
+          # mixsmsn
+          res <- as.data.frame(mod$result$obs.prob)
+          quickclass <- function(x){rmultinom(n = 1, size = 1, prob = x)}
+          resclass <- apply(X = res, MARGIN = 1, FUN = quickclass)
+          resclass <- data.frame(t(resclass))
+          names(resclass) <- paste("gen", rank(mod$result$mu), sep = "_")
+          outclass <- cbind(outdf, resclass) %>% 
+            tidyr::gather(key = gen, value = count, contains("gen")) %>% 
+            mutate(gen = as.numeric(stringr::str_split_fixed(gen, pattern = "_", n = 2)[, 2]),
+                   year = lubridate::year(SiteDate)) %>% 
+            filter(count > 0) %>% 
+            mutate(region = reg, 
+                   index = param$index)
+        }else{
+          # error statement
+          outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
+                                 curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+        }
+      }else{
+        # error statement
+        outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
+                               curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+      }
     }
-  }else{
-    # error statement
-    outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
-                           curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+    outlist[[ngen]] <- dplyr::full_join(dat, outclass) %>% mutate(maxgen = ngen)
   }
-  return(outclass)
+  allout <- bind_rows(outlist)
+  return(allout)
 }
