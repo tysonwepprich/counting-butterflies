@@ -31,8 +31,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
@@ -196,7 +196,7 @@ plt
 #####
 # Simulation
 #####
-ncores <- 6
+ncores <- 24
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -216,7 +216,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                     .export = c("params", "gdd", "Abund_Curve", 
                                 "Adjust_Counts", "CompareMixMods",
                                 "Simulate_Counts", "Summ_curve",
-                                "Summ_mixmod", "mainDir"),
+                                "Summ_mixmod", "mainDir", "RightNumGen", "AssignGeneration"),
                     .inorder = FALSE,
                     .options.multicore = mcoptions) %dopar% {
                       
