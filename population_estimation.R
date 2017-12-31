@@ -196,7 +196,7 @@ plt
 #####
 # Simulation
 #####
-ncores <- 24
+ncores <- 20
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -290,6 +290,14 @@ if(.Platform$OS.type == "windows"){
 #####
 # Summarize results
 #####
+#new notes:
+# if mixmods don't work at all, maxgen skipped in bestmods/genright which could skew best model based on AIC if some missing
+# the right maxgen may not work, which threw off siteresults
+# now, if this happens, in siteresults all generations/counts assigned as NA, which is cue that mixture model didn't work
+
+
+#####
+
 # Expect ngen to be wrong when last generation weight falls lower.
 # Many mixture models fail to fit, how to include or account for these?
 
@@ -306,6 +314,10 @@ if(.Platform$OS.type == "windows"){
 # NB: not all mixture model problems filtered out, like sigma2 close to zero to create a peak for one count
 
 fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
+fs_index <- stringr::str_split_fixed(string = fs, pattern = "_", n = 3)[, 3]
+
+# errors, just ignored because only 3
+params[-which(params$index %in% fs_index), ]
 
 outlist <- list()
 for (f in fs){
@@ -320,8 +332,43 @@ for (f in fs){
   # 1. when is number of generations correct compared to params? 
   # What others errors, like degenerate modes with redundant mu?
   # Compare across models for best fit to true ngen, compare within models to see if correct ngen selected
-  true_ngen <- param$ngen
-    
+  ngen <- genright %>% 
+    filter(right_ngen == "yes") %>% 
+    group_by(region) %>% 
+    slice(1L) %>% 
+    dplyr::select(maxgen, mixmod_flag, badmixmod:region)
+  
+  trueweight <- truth %>% 
+    mutate(Year = as.character(Year)) %>% 
+    left_join(adjcounts[, c("SiteID", "Year", "region")]) %>% 
+    filter(Gen == max(Gen)) %>% 
+    group_by(region) %>% 
+    summarise(true_weight = mean(gen_weight))
+  
+  ngen_score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),], ngen) %>% 
+    left_join(trueweight)
+  
+  outlist[[length(outlist)+1]] <- ngen_score
+}
+
+outdf <- bind_rows(outlist)
+
+
+# more than 1000 errors (no results returned) of unknown cause, DOY gam_scale in common and 3 or 4 ngen
+errparam <- params[-which(params$index %in% unique(outdf$index)), ]
+  
+outdf <- outdf %>% 
+  mutate(corrAIC = ifelse(within_model_aic > 0, 0, 1),
+         corrBIC = ifelse(within_model_bic > 0, 0, 1))
+
+mod <- glm(corrAIC ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + pois_lam + detprob_model + mixmod + region,
+           family = binomial(link = "logit"), data = outdf)
+
+  
+  
+  
+  # graveyard
+  
   mods_work <- summ_mods %>% 
     ungroup() %>% 
     select(SiteID, Year, maxgen, model) %>% 
