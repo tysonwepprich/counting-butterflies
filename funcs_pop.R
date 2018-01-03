@@ -1,5 +1,21 @@
 # Functions for population estimation
 
+# UKBMS count index approximation
+TrapezoidIndex <- function(timescale, counts){
+  dat <- data.frame(t = timescale, y = counts)
+  dat <- arrange(dat, timescale)
+  if(nrow(dat) == 1){
+    return(dat$y)
+  }else{
+    temp <- rep(NA, nrow(dat)-1)
+    for (i in 2:length(dat$t)){
+      temp[i-1] <- (dat$y[i] + dat$y[i-1]) * (dat$t[i] - dat$t[i-1]) / 2
+    }
+  }
+  return(sum(temp))
+}
+
+
 # Uses generalized Zonneveld model from Calabrese to model emergence and total abundance of one generation
 Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
   
@@ -24,15 +40,16 @@ Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
   cdf <- cumsum(y) / sum(y)
   cmean <- weighted.mean(t, y)
   cmax <- t[which(y == max(y))][1]
+  estN <- sum(y)
   
   cquant <- rep(NA, length(quants))
   for (i in seq_along(quants)){
-  cquant[i] <- t[which(abs(cdf - quants[i]) == min(abs(cdf - quants[i])))]
+    cquant[i] <- t[which(abs(cdf - quants[i]) == min(abs(cdf - quants[i])))][1]
   }
   
-  df <- matrix(data = c(cmean, cmax, cquant, n), nrow = 1)
+  df <- matrix(data = c(cmean, cmax, cquant, estN), nrow = 1)
   df <- data.frame(df)
-  names(df) <- c("curve_mean", "curve_max", paste0("curve_q", quants), "n")
+  names(df) <- c("curve_mean", "curve_max", paste0("curve_q", quants), "estN")
   return(df)
 }
 
