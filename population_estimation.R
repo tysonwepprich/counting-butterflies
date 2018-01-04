@@ -14,6 +14,7 @@ library(purrr)
 library(lubridate)
 library(mclust)
 library(mixsmsn)
+library(caret)
 
 # for parallel simulations with control over seed for reproducibility
 # need different packages for windows computers
@@ -341,16 +342,17 @@ if(.Platform$OS.type == "unix"){
 }
 
 mcoptions <- list(preschedule = FALSE)
-outfiles <- foreach(f = 1:length(fs),
+outfiles <- foreach(sim = 1:length(fs),
                     .combine='c',
                     .packages= c("mgcv", "dplyr", "tidyr", "purrr",
                                  "lubridate", "mclust", "mixsmsn"),
-                    .export = c("Abund_Curve", 
+                    .export = c("Abund_Curve", "fs",
                                 "Adjust_Counts", "CompareMixMods",
                                 "Simulate_Counts", "Summ_curve",
                                 "Summ_mixmod", "RightNumGen", "AssignGeneration", "TrapezoidIndex"),
                     .inorder = FALSE,
                     .options.multicore = mcoptions) %dopar% {
+                      f <- fs[sim]
                       tmp <- readRDS(f)
                       param <- tmp[[1]]
                       counts <- tmp[[2]]
@@ -390,6 +392,7 @@ outfiles <- foreach(f = 1:length(fs),
                       siteresults$Gen <- siteresults$gen
                       siteresults$gen <- NULL
                       phen_est <- siteresults %>% 
+                        dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>% 
                         filter(complete.cases(.)) %>% 
                         filter(maxgen == param$ngen) %>% 
                         ungroup() %>% 
@@ -412,6 +415,7 @@ outfiles <- foreach(f = 1:length(fs),
                       # 4. what is error in site/year population size compared to "truth" using trapezoid rule?
                       # do population index in terms of DOY like UKBMS
                       N_est <- siteresults %>% 
+                        dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>% 
                         filter(complete.cases(.)) %>% 
                         filter(maxgen == param$ngen) %>% 
                         ungroup() %>% 
@@ -474,6 +478,119 @@ outfiles <- foreach(f = 1:length(fs),
                       saveRDS(tmp, file = f)
                       
                     }
+# Didnt work with purrr
+# system.time({
+# genscore <- fs %>% 
+#   map_df(~ readRDS(.)[[7]])
+# siteyrscore <- fs %>% 
+#   map_df(~ readRDS(.)[[8]])
+# relpopscore <- fs %>% 
+#   map_df(~ readRDS(.)[[9]])
+# })
+
+system.time({
+genscore <- vector("list", length(fs))
+siteyrscore <- vector("list", length(fs))
+relpopscore <- vector("list", length(fs))
+for (i in 1:length(fs)){
+  f <- fs[i]
+  tmp <- readRDS(f)
+  genscore[[i]] <- tmp[[7]]
+  siteyrscore[[i]] <- tmp[[8]]
+  relpopscore[[i]] <- tmp[[9]]
+}
+gendf <- bind_rows(genscore)
+phendf <- bind_rows(siteyrscore)
+popdf <- bind_rows(relpopscore)
+})
+saveRDS(gendf, "gendf.rds")
+saveRDS(phendf, "phendf.rds")
+saveRDS(popdf, "popdf.rds")
+
+# scoring results
+gendf <- readRDS("gendf.rds")
+phendf <- readRDS("phendf.rds")
+popdf <- readRDS("popdf.rds")
+
+
+df <- gendf %>% 
+  filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom", pois_lam != 100)
+
+# confusion matrix for generations classified by mixmod
+# AIC chooses too many gen, BIC better but not great especially for ngen == 1
+true <- factor(df$ngen, levels = c("1", "2", "3", "4", "5"))
+pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+cfmat <- caret::confusionMatrix(pred, true)
+cfmat
+# rmse comparison for different parameters
+phendf %>% 
+  filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom", pois_lam != 100) %>% 
+  group_by(metric, ngen, Gen) %>% 
+  summarise(RMSE = mean(rmse)) %>% 
+  ggplot(aes(x = ngen, y = RMSE, group = Gen, color = Gen)) +
+  geom_point() +
+  facet_wrap(~metric, scales = "free_y")
+
+# correlation of relative pop size
+df <- popdf %>% 
+  filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom", pois_lam != 100)
+plt <- ggplot(df, aes(x = corrpop, group = Gen, color = Gen)) +
+  geom_density() +
+  facet_wrap(~ngen)
+plt
+mod <- lm(corrpop ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + pois_lam + detprob_model + mixmod + mod_region,
+           data = popdf)
+
+
+
+# scores of parameter sets, one at a time
+# could use confusion matrix accuracy CI for significant differences
+outlist <- list()
+outlist1 <- list()
+for(i in names(params)[c(4:6, 10, 11, 15, 18, 19)]){
+  p <- gendf[, i]
+  # mixmod accuracy
+  df <- gendf %>% 
+    mutate(true = factor(ngen, levels = c("1", "2", "3", "4", "5")),
+           pred = factor(bicpick, levels = c("1", "2", "3", "4", "5")),
+           varsplit = i,
+           varfact = as.factor(as.character(p))) %>% 
+    group_by(varsplit, varfact) %>% 
+    do(data.frame(t(caret::confusionMatrix(.$pred, .$true)$overall)))
+  
+  outlist[[length(outlist)+1]] <- df
+  
+  p <- phendf[, i]
+  df <- phendf %>% 
+    mutate( varsplit = i,
+            varfact = as.factor(as.character(p)))  %>% 
+    group_by(varsplit, varfact, metric) %>% 
+    summarise(RMSE = mean(rmse)) %>% 
+    data.frame()
+  outlist1[[length(outlist1)+1]] <- df
+}
+
+generr <- bind_rows(outlist)
+phenerr <- bind_rows(outlist1)
+
+genplt <- ggplot(generr, aes(x = varfact, y = Accuracy)) +
+  geom_point() +
+  geom_linerange(aes(ymin=AccuracyLower, ymax=AccuracyUpper), colour="black", width=.1) +
+  facet_wrap(~varsplit, scales = "free_x")
+genplt
+
+for (splt in unique(phenerr$varsplit)){
+  plt <- phenerr %>% 
+  filter(varsplit == splt) %>% 
+  ggplot(aes(x = varfact, y = RMSE)) +
+  geom_point() +
+  scale_y_continuous(limits = c(0, NA)) +
+  # geom_linerange(aes(ymin=AccuracyLower, ymax=AccuracyUpper), colour="black", width=.1) +
+  facet_wrap(~metric, scales = "free")
+  print(plt)
+}
+
+
 
 outdf <- bind_rows(outlist)
 saveRDS(outdf, file = "genright.rds")
