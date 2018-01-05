@@ -1,5 +1,21 @@
 # Functions for population estimation
 
+# UKBMS count index approximation
+TrapezoidIndex <- function(timescale, counts){
+  dat <- data.frame(t = timescale, y = counts)
+  dat <- arrange(dat, timescale)
+  if(nrow(dat) == 1){
+    return(dat$y)
+  }else{
+    temp <- rep(NA, nrow(dat)-1)
+    for (i in 2:length(dat$t)){
+      temp[i-1] <- (dat$y[i] + dat$y[i-1]) * (dat$t[i] - dat$t[i-1]) / 2
+    }
+  }
+  return(sum(temp))
+}
+
+
 # Uses generalized Zonneveld model from Calabrese to model emergence and total abundance of one generation
 Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
   
@@ -24,15 +40,16 @@ Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
   cdf <- cumsum(y) / sum(y)
   cmean <- weighted.mean(t, y)
   cmax <- t[which(y == max(y))][1]
+  estN <- sum(y)
   
   cquant <- rep(NA, length(quants))
   for (i in seq_along(quants)){
-  cquant[i] <- t[which(abs(cdf - quants[i]) == min(abs(cdf - quants[i])))]
+    cquant[i] <- t[which(abs(cdf - quants[i]) == min(abs(cdf - quants[i])))][1]
   }
   
-  df <- matrix(data = c(cmean, cmax, cquant, n), nrow = 1)
+  df <- matrix(data = c(cmean, cmax, cquant, estN), nrow = 1)
   df <- data.frame(df)
-  names(df) <- c("curve_mean", "curve_max", paste0("curve_q", quants), "n")
+  names(df) <- c("curve_mean", "curve_max", paste0("curve_q", quants), "estN")
   return(df)
 }
 
@@ -404,7 +421,7 @@ RightNumGen <- function(mixmods, param, reg){
     mutate(badmixmod = sum(mixmod_flag, na.rm = TRUE),
            redundant = ifelse(maxgen > 1, min(diff(mu, lag = 1), na.rm = TRUE), NA),
            nearzerosigma = min(sigma2, na.rm = TRUE)) %>%
-    filter(badmixmod == 0, nearzerosigma > 100) %>% 
+    # filter(badmixmod == 0, nearzerosigma > 100) %>% 
     group_by(model) %>%
     mutate(within_model_bic = bic - min(bic, na.rm = TRUE),
            within_model_aic = aic - min(aic, na.rm = TRUE)) %>%
@@ -569,12 +586,12 @@ AssignGeneration <- function(mixmod, dat, param, reg){
                    index = param$index)
         }else{
           # error statement
-          outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
+          outclass <- data.frame(SiteID = "999", year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
                                  curve_q0.9 = NA, n = NA, region = reg, index = param$index)
         }
       }else{
         # error statement
-        outclass <- data.frame(SiteID = NA, year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
+        outclass <- data.frame(SiteID = "999", year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
                                curve_q0.9 = NA, n = NA, region = reg, index = param$index)
       }
     }
