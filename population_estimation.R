@@ -32,8 +32,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
@@ -138,7 +138,7 @@ params$seed <- 1:nrow(params)
 params$index <- formatC(params$seed, width=5, flag="0")
 
 
-# params <- params[c(1, 2001, 2501, 3001, 3501, 4001), ]
+params <- params[c(1, 2001, 2501, 3001, 3501, 4001), ]
 # 
 # fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 # details <- file.info(fs)
@@ -197,6 +197,7 @@ plt
 #####
 # Simulation
 #####
+ncores <- 6
 ncores <- 30
 
 if(.Platform$OS.type == "unix"){
