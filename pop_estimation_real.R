@@ -74,14 +74,14 @@ siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"),
 gdd <- gdd %>% 
   left_join(siteGDD[, c("SiteID", "region")])
 
-# add spring/fall frost to gdd as covariate
-gdd <- gdd %>% 
-  group_by(SiteID, Year) %>% 
-  arrange(DOY) %>% 
-  mutate(frost5day = rollmean(x = minT, 5, align = "right", fill = NA)) %>% 
-  mutate(fallfrost = ifelse(DOY > 200, frost5day, NA),
-         springfrost = ifelse(DOY < 200, frost5day, NA),
-         photo = geosphere::daylength(lat, DOY))
+# # add spring/fall frost to gdd as covariate
+# gdd <- gdd %>% 
+#   group_by(SiteID, Year) %>% 
+#   arrange(DOY) %>% 
+#   mutate(frost5day = rollmean(x = minT, 5, align = "right", fill = NA)) %>% 
+#   mutate(fallfrost = ifelse(DOY > 200, frost5day, NA),
+#          springfrost = ifelse(DOY < 200, frost5day, NA),
+#          photo = geosphere::daylength(lat, DOY))
 
 # test <- gdd %>% filter(Year > 2010) 
 # plt <- ggplot(test, aes(x = SiteDate, y = springfrost)) +
@@ -91,13 +91,14 @@ gdd <- gdd %>%
 
 models <- c("doy", "gdd")
 cutoff <- "loose" #c("adapt","strict", "loose")
-params <- expand.grid(species$CommonName, models, cutoff,
+years <- "all"  #c("all", "train", "test")
+params <- expand.grid(species$CommonName, models, cutoff, years,
                       stringsAsFactors = FALSE)
-names(params) <- c("species", "model", "cutoff")
+names(params) <- c("species", "model", "cutoff", "years")
 # params <- params %>% arrange(species)
 # params <- params[c(5),]
 
-ncores <- 20
+ncores <- 15
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -123,12 +124,11 @@ outfiles <- foreach(sim = 1:nrow(params),
                       species <- params$species[sim]
                       model <- params$model[sim]
                       cutoff <- params$cutoff[sim]
-                      
+                      years <- params$years[sim]
                       # print(species)
                       # print(Sys.time())
                       
-                      reduced <- NA
-                      pars <- data.frame(species, model, cutoff, reduced)
+                      pars <- data.frame(species, model, cutoff, years)
                       
                       counts <- data %>% 
                         filter(CommonName == species) %>% 
@@ -200,6 +200,19 @@ outfiles <- foreach(sim = 1:nrow(params),
                       #   datGAM <- datGAM %>% 
                       #     filter(SiteYear %in% unique(filtered$SiteYear))
                       # }
+                      
+                      # years to use in GAM
+                      if(years == "train"){
+                        datGAM <- datGAM %>% 
+                          filter(Year < 2010) %>% 
+                          droplevels()
+                      }
+                      if(years == "test"){
+                        datGAM <- datGAM %>% 
+                          filter(Year >= 2010) %>% 
+                          droplevels()
+                      }
+                      
                       
                       if(nrow(datGAM) == 0){
                         mod <- NA
@@ -277,10 +290,12 @@ outfiles <- foreach(sim = 1:nrow(params),
                         }
                       }
                       
-                      
-                      pars$modtime <- modtime
+                      if(class(mod) == "try-error"){
+                        mod <- NA
+                      }
+                      pars$modtime <- as.numeric(modtime)[1]
                       if(is.na(mod) == FALSE){
-                        
+                        species <- gsub('([[:punct:]])|\\s+','_', species)
                         pars$AIC <- AIC(mod)
                         summod <- summary(mod)
                         pars$N <- summod$n
@@ -290,7 +305,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                         outlist[["params"]] <- pars
                         outlist[["gammod"]] <- mod
                         outlist[["datGAM"]] <- temp
-                        saveRDS(outlist, paste(species, model, cutoff, "rds", sep = "."))
+                        saveRDS(outlist, paste(species, model, years, "rds", sep = "."))
                         
                       }
                       return(sim)
