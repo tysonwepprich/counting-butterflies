@@ -50,8 +50,8 @@ covdata <- data %>%
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 
 gdd <- left_join(gdd, sites) %>% 
@@ -299,8 +299,9 @@ traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>%
   filter(UseMismatch == "y") %>% 
   select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
 
-fs <- list.files("C:/Users/Tyson/Desktop/OHGAMS", full.names = TRUE)
-fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
+# fs <- list.files("C:/Users/Tyson/Desktop/OHGAMS", full.names = TRUE)
+# fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
+fs <- list.files("GAMtrain", full.names = TRUE)
 
 # mixmod parameters to run for each species
 mixmod <- c("hom", "het", "skew")
@@ -310,10 +311,10 @@ params <- expand.grid(params)
 
 #for each fs
 
-f <- fs[1]
-spp <- stringr::str_split(string = fs, pattern = coll("/"), 6)
-spp <- stringr::str_split(string = spp, pattern = coll("."), 4)[[1]][1]
-if(spp %in% traits$CommonName){
+f <- fs[4]
+# spp <- stringr::str_split(string = fs, pattern = coll("/"), 6)
+# spp <- stringr::str_split(string = spp, pattern = coll("."), 4)[[1]][1]
+# if(spp %in% traits$CommonName){
   
   tmp <- readRDS(f)
   pars <- tmp$params
