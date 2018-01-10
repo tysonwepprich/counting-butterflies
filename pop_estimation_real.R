@@ -51,8 +51,8 @@ covdata <- data %>%
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 
 gdd <- left_join(gdd, sites) %>% 
@@ -295,15 +295,15 @@ if(.Platform$OS.type == "windows"){
 
 
 # Now that GAMs fit, run through mixture models as in simulation
+# Check errors in baltimore and leonard's
 
 traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>% 
   filter(UseMismatch == "y") %>% 
   select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
 
-fs <- list.files("C:/Users/Tyson/Desktop/OHGAMS", full.names = TRUE)
-fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
-# fs <- list.files("OHGAMS", full.names = TRUE)
-
+fs <- list.files("OHGAMS/separates", full.names = TRUE)
+# fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
+# fs <- fs[c(15, 16, 111, 112)]
 # mixmod parameters to run for each species
 mixmod <- c("hom", "het", "skew")
 mod_region <- c("ALL", "reg4")
@@ -311,8 +311,18 @@ modparams <- list(mixmod = mixmod, mod_region = mod_region)
 modparams <- expand.grid(modparams)
 
 
+
+ncores <- 30
+if(.Platform$OS.type == "unix"){
+  registerDoMC(cores = ncores)
+}else if(.Platform$OS.type == "windows"){
+  cl <- makeCluster(ncores)
+  registerDoSNOW(cl)
+}
+
+mcoptions <- list(preschedule = FALSE)
 # foreach loop
-outfiles <- foreach(sim = 1:nrow(fs),
+outfiles <- foreach(sim = 1:length(fs),
                     .combine='c',
                     .packages= c("mgcv", "dplyr", "tidyr", "purrr",
                                  "lubridate", "mclust", "mixsmsn"),
@@ -322,8 +332,9 @@ outfiles <- foreach(sim = 1:nrow(fs),
                     .options.multicore = mcoptions) %dopar%{
                       
                       f <- fs[sim]
-                      spp <- stringr::str_split(string = f, pattern = coll("/"), 6)[[1]][6]
-                      spp <- stringr::str_split(string = spp, pattern = coll("."), 4)[[1]][1]
+                      print(f)
+                      spp <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
+                      spp <- stringr::str_split(string = spp, pattern = coll("."), 4) %>% map(1) %>% unlist()
                       if(spp %in% traits$CommonName){
                         
                         tmp <- readRDS(f)
@@ -337,6 +348,14 @@ outfiles <- foreach(sim = 1:nrow(fs),
                         params$seed <- sim
                         params$index <- sim
                         params$species <- spp
+                        
+                        # issue with near infinite gam predictions, 
+                        # try removing siteyears with very few counts
+                        # happened at beginning of season, might need zero anchoring
+                        counts <- counts %>% 
+                          filter(YearTotal > 1, SurvSeen > 1) %>% 
+                          droplevels()
+                        
                         
                         preds <- gdd %>% 
                           mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
@@ -353,7 +372,7 @@ outfiles <- foreach(sim = 1:nrow(fs),
                         Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
                         beta <- coef(mod)
                         Vb   <- vcov(mod) ## posterior mean and cov of coefs
-                        n <- 5 # choose number of simulations
+                        n <- 25 # choose number of simulations
                         mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
                         ilink <- family(mod)$linkinv
                         linklppreds <- Xp %*% t(mrand)
@@ -371,12 +390,13 @@ outfiles <- foreach(sim = 1:nrow(fs),
                                            return(x)
                                          })
                         preds$adjY <- nbpreds
+                        # preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
                         
                         tmp[["preds"]] <- preds
                         
                         
-                        outgen() <- list()
-                        outN() <- list()
+                        outgen <- list()
+                        outN <- list()
                         for (p in 1:nrow(params)){
                           param <- params[p, ]
                           adjcounts <- preds
@@ -411,7 +431,8 @@ outfiles <- foreach(sim = 1:nrow(fs),
                                    bicpick = maxgen[which(within_model_bic == 0)][1]) %>% 
                             filter(bicpick == maxgen) %>% 
                             slice(1L) %>% 
-                            dplyr::select(maxgen, mixmod_flag, badmixmod:bicpick) %>% 
+                            dplyr::select(maxgen, mixmod_flag, badmixmod:bicpick)
+                          ngen <- ngen %>% 
                             bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),])
                           
                           # get phenology for each SiteYear and generation for "best" maxgen

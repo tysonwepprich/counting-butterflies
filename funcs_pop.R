@@ -303,7 +303,7 @@ CompareMixMods <- function(dat, param){
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
-  mvmax <- param$ngen + 1
+  mvmax <- param$ngen
   gens <- c(mvmin:mvmax)
   maxtry <- 5 # repeating smsn.mix function if errors
   # out <- as.list(mvmin:mvmax)
@@ -512,7 +512,7 @@ Summ_mixmod <- function(df){
       # error statement
       gen_res_df <- data.frame(curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
                                curve_q0.9 = NA, gen = NA, maxgen = NA, mu= NA, sigma2 = NA, shape = NA,
-                               w = NA, nu = NA, aic = NA, bic = NA, edc = NA, icl = NA, model = NA)
+                               w = NA, nu = NA, aic = NA, bic = NA, edc = NA, icl = NA, model = NA, mixmod_flag = 1)
     }
     alldf[[m]] <- gen_res_df
   }
@@ -538,7 +538,7 @@ AssignGeneration <- function(mixmod, dat, param, reg){
   outdf <- outdf[rep(dat$row, y), ]
   
   outlist <- list()
-  for (ngen in 1:(param$ngen + 1)){
+  for (ngen in 1:(param$ngen)){
     if(ngen == 1){
       outclass <- outdf %>% 
         mutate(gen = 1,
@@ -586,13 +586,13 @@ AssignGeneration <- function(mixmod, dat, param, reg){
                    index = param$index)
         }else{
           # error statement
-          outclass <- data.frame(SiteID = "999", year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
-                                 curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+          outclass <- data.frame(SiteID = "999", gen = ngen,
+                                 region = reg, index = param$index)
         }
       }else{
         # error statement
-        outclass <- data.frame(SiteID = "999", year = NA, curve_mean = NA, curve_max = NA, curve_q0.1 = NA, curve_q0.5 = NA,
-                               curve_q0.9 = NA, n = NA, region = reg, index = param$index)
+        outclass <- data.frame(SiteID = "999", gen = ngen,
+                               region = reg, index = param$index)
       }
     }
     outlist[[ngen]] <- dplyr::full_join(dat, outclass) %>% mutate(maxgen = ngen)
