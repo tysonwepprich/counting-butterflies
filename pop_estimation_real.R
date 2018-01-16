@@ -92,7 +92,7 @@ gdd <- gdd %>%
 #   facet_wrap(~region, ncol = 2)
 # plt
 
-models <- c("doy", "gdd")
+models <- "both"#c("doy", "gdd")
 cutoff <- "loose" #c("adapt","strict", "loose")
 years <- "all"  #c("all", "train", "test")
 params <- expand.grid(species$CommonName, models, cutoff, years,
@@ -173,7 +173,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                       if(cutoff == "loose"){
                         datGAM <- counts %>% filter(YearTotal >= 1, SurvPerYear >= 10)
                       }
-                      
+
                       # # years to use in GAM
                       # if(years == "train"){
                       #   datGAM <- datGAM %>% 
@@ -185,7 +185,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                       #     filter(Year >= 2010) %>% 
                       #     droplevels()
                       # }
-                      
+
                       
                       if(nrow(datGAM) == 0){
                         mod <- NA
@@ -286,12 +286,29 @@ outfiles <- foreach(sim = 1:nrow(params),
                             }
                             
                             if(model == "doy"){
-                              mod <- safe_gam(Total ~ 
+                              mod1 <- safe_gam(Total ~ 
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
                                                 s(SiteID, bs = "re") +
                                                 s(RegYear, DOY, bs = "fs", k = 5, m = 1),
+                                              family = nb(theta = NULL, link = "log"),
+                                              # family = poisson(link = "log"),
+                                              data = temp,
+                                              method = "REML", 
+                                              optimizer = c("outer", "newton"), 
+                                              # gamma = 1.4, 
+                                              control = list(maxit = 500))
+                            }
+                            
+                            if(model == "both"){
+                              mod2 <- safe_gam(Total ~ 
+                                                s(zlistlength) +
+                                                s(ztemperature) +
+                                                te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
+                                                s(SiteID, bs = "re") +
+                                                s(Year, DOY, bs = "fs", k = 5, m = 1) +
+                                                s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
                                               # family = poisson(link = "log"),
                                               data = temp,
