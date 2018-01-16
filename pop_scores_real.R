@@ -5,7 +5,7 @@
 # tendency to select ngen for mixmod and mod_region (without judgement on whether right?)
 # could plot GAM predictions
 # could plot generation weights/means to check for separation
-#mclust broods
+
 source("funcs_pop.R")
 # packages to load
 library(mclust)
@@ -49,120 +49,165 @@ siteGDD <- gdd %>%
   summarise(meanGDD = mean(AccumDD))
 sitemod <- densityMclust(siteGDD[,c(2:3)], G = 1:4, modelNames = "EEV")
 siteGDD$region <- as.character(sitemod$classification)
+
+###NB: these regions are wrong, but were also modeled with wrong names
+# correct below after GAM predictions from models
 siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
                                   to = c("NE", "NW", "CN", "SW"))
 gdd <- gdd %>% 
   left_join(siteGDD[, c("SiteID", "region")])
 
-gdd$region <- factor(gdd$region, levels = c("NW", "NE", "SW", "CN"))
 
 
-
-# test out PV metric
-
-PropVariation <- function(numvect){
-  reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
-  pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]))
-  return(pv)
-}
-
-test2 <- tmp$N %>%
-  filter(Data == gam_scale) %>% 
-  group_by(Gen, mixmod, region, gam_scale) %>% 
-  summarise(pv = PropVariation(curve_mean),
-            cv = sd(curve_mean) / mean(curve_mean))
-
-system.time({
-  genscore <- vector("list", length(fs))
-  siteyrscore <- vector("list", length(fs))
-  relpopscore <- vector("list", length(fs))
-  for (i in 1:length(fs)){
-    f <- fs[i]
-    tmp <- readRDS(f)
-    mod <- tmp$gammod
+for (i in 1:length(fs)){
+  f <- fs[i]
+  tmp <- readRDS(f)
+  mod <- tmp$gammod
+  
+  counts <- tmp$datGAM %>% 
+    filter(YearTotal > 1, SurvSeen > 1) %>% 
+    droplevels()
+  
+  ##### 
+  # plot GAM predictions for species/model
+  preds <- gdd %>% 
+    mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
+    filter(SiteYear %in% unique(counts$SiteYear)) %>%
+    group_by(SiteID, Year) %>% 
+    mutate(SiteYearGDD = max(AccumDD)) %>% 
+    filter(DOY %in% seq(90, 305, 1)) %>% 
+    ungroup() %>% 
+    mutate(zlistlength = 0,
+           ztemperature = 0,
+           zduration = 0,
+           RegYear = paste(region, Year, sep = "_" )) 
+  preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
+  
+  preds <- preds %>% 
+    group_by(SiteYear) %>%
+    mutate(Gamma = adjY / as.vector(sum(adjY)),
+           SiteYearTotal = sum(adjY)) %>%
+    # filter(SiteYearTotal >= 20)
+    group_by(region) %>% 
+    filter(SiteYear %in% sample(unique(SiteYear), 20, replace = TRUE))
+  
+  preds$region <- plyr::mapvalues(preds$region, from = c("NE", "NW", "CN", "SW"), 
+                                    to = c("CN", "NE", "NW", "SW"))
+  preds$region <- factor(preds$region, levels = c("NW", "NE", "SW", "CN"))
+  
+  
+  if(tmp$params$model == "doy"){
+    gamplt <- ggplot(preds, aes(x = DOY, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
+      geom_path(alpha = .5) + 
+      scale_color_viridis() + 
+      facet_wrap(~region, scales = "free_y") +
+      ggtitle(paste0(tmp$params$species, " seasonal phenology"),
+              subtitle = "modeled on calendar scale") +
+      labs(color = "Total degree-days\n for site and year") +
+      labs(x = "Day of year") +
+      labs(y = "Scaled phenology (model predictions)")
+  }else{
+    gamplt <- ggplot(preds, aes(x = AccumDD, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
+      geom_path(alpha = .5) + 
+      scale_color_viridis() + 
+      facet_wrap(~region, scales = "free_y") +
+      ggtitle(tmp$params$species,
+              subtitle = "modeled on degree-day scale") +
+      labs(color = "Total degree-days\n for site and year") +
+      labs(x = "Degree-days accumulated (5/30C thresholds)") +
+      labs(y = "Scaled phenology (model predictions)")
+  }
+  ggsave(filename = paste(tmp$params$species, tmp$params$model, "GAM", "png", sep = "."), 
+         plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
+  
+# }
+  regions <- tmp$datGAM %>% 
+    ungroup() %>% 
+    dplyr::select(SiteID, region) %>% 
+    distinct()
+  N <- tmp$N %>% 
+    ungroup() %>% 
+    dplyr::select(-region) %>% 
+    left_join(regions)
+  
+  N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"), 
+                                  to = c("CN", "NE", "NW", "SW"))
+  N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
     
-    counts <- tmp$datGAM %>% 
-      filter(YearTotal > 1, SurvSeen > 1) %>% 
-      droplevels()
-    
-    ##### 
-    # plot GAM predictions for species/model
-    preds <- gdd %>% 
-      mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
-      filter(SiteYear %in% unique(counts$SiteYear)) %>%
-      group_by(SiteID, Year) %>% 
-      mutate(SiteYearGDD = max(AccumDD)) %>% 
-      filter(DOY %in% seq(90, 305, 1)) %>% 
-      ungroup() %>% 
-      mutate(zlistlength = 0,
-             ztemperature = 0,
-             zduration = 0,
-             RegYear = paste(region, Year, sep = "_" )) 
-    preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
-    
-    preds <- preds %>% 
-      group_by(SiteYear) %>%
-      mutate(Gamma = adjY / as.vector(sum(adjY)),
-             SiteYearTotal = sum(adjY)) %>%
-      filter(SiteYearTotal >= 20)
-    
-    if(tmp$params$model == "doy"){
-      gamplt <- ggplot(preds, aes(x = DOY, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
-        geom_path(alpha = .5) + 
-        scale_color_viridis() + 
-        facet_wrap(~region, scales = "free_y") +
-        ggtitle(tmp$params$species)
-    }else{
-      gamplt <- ggplot(preds, aes(x = AccumDD, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
-        geom_path(alpha = .5) + 
-        scale_color_viridis() + 
-        facet_wrap(~region, scales = "free_y") +
-        ggtitle(tmp$params$species)
-    }
-    ggsave(filename = paste(tmp$params$species, tmp$params$model, "GAM", "png", sep = "."), 
-           plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
-    
-    
-    ##### 
-    # Brood weights
-    # 
-    # do( complete(., SiteYear, nsim, brood, 
-    #              fill = list(num = 0, weight = 0, mu = NA, sigma = NA, sim = 0))) %>% 
-    # 
-    weights <- tmp$N %>% 
-      filter(Data == gam_scale,
-             mod_region == "ALL",
-             mixmod == "hom") %>% 
-      dplyr::select(SiteID, Year, Gen, PopIndex, region, ngen, species)
-      group_by(SiteID, Year) %>% 
-      mutate(EstPerGen = ifelse(max(Gen) > length(which(PopIndex > 0)),
-                                "no", "yes"),
-             DevFromNgen = max(Gen) - ngen,
-             SiteYearTotal = sum(PopIndex)) %>% 
-      filter(EstPerGen == "yes",
-             SiteYearTotal >= 10)
+  ##### 
       
-    
-    # plots brood weights by region for each SiteYear
-    plt <- ggplot(N, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+    # Plot of brood separation
+    weights <- N %>% 
+      spread(key = metric, value = value) %>% 
+      group_by(SiteID, Year) %>% 
+      mutate(AnnPopIndex = sum(PopIndex),
+             gen_weight = PopIndex / AnnPopIndex) %>% 
+      filter(AnnPopIndex > 20)
+    plt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
       geom_point() +
-      facet_grid(region~mixmod)
+      facet_wrap(~region, nrow = 2)
     plt
     
+    if(tmp$params$model == "doy"){
+      genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+        geom_point(alpha = .5) + 
+        # scale_color_viridis(discrete = TRUE) + 
+        facet_wrap(~region, scales = "free_y") +
+        ggtitle(paste0(tmp$params$species, " generation size and timing"),
+                subtitle = "modeled on calendar scale") +
+        labs(color = "Generation") +
+        labs(x = "Day of year") +
+        labs(y = "Scaled generation size")
+    }else{
+      genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+        geom_point(alpha = .5) + 
+        # scale_color_viridis(discrete = TRUE) + 
+        facet_wrap(~region, scales = "free_y") +
+        ggtitle(paste0(tmp$params$species, " generation size and timing"),
+                subtitle = "modeled on degree-day scale") +
+        labs(color = "Generation") +
+        labs(x = "Degree-days accumulated (5/30C thresholds)") +
+        labs(y = "Scaled generation size")
+    }
+    ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."), 
+           plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
+    
+    # Brood weights with zero counts added if missing estimates
+    pops <- N %>% 
+      ungroup() %>% 
+      dplyr::select(region, SiteID, Year, Gen, metric, value) %>%
+      filter(metric == "PopIndex") %>% 
+      complete(nesting(region, SiteID, Year), Gen, fill = list(metric = "PopIndex", value = 0)) %>% 
+      mutate(maxgen = max(Gen)) %>% 
+      group_by(SiteID, Year) %>% 
+      mutate(AnnPopIndex = sum(value),
+             gen_weight = value / AnnPopIndex)
     
     
-    genscore[[i]] <- tmp[[7]]
-    siteyrscore[[i]] <- tmp[[8]]
-    relpopscore[[i]] <- tmp[[9]]
-  }
-  gendf <- bind_rows(genscore)
-  phendf <- bind_rows(siteyrscore)
-  popdf <- bind_rows(relpopscore)
-})
-saveRDS(gendf, "gendf.rds")
-saveRDS(phendf, "phendf.rds")
-saveRDS(popdf, "popdf.rds")
-
+    # test out PV metric
+    
+    PropVariation <- function(numvect){
+      reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
+      pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]))
+      return(pv)
+    }
+    
+    test1 <- N %>%
+      # spread(key = metric, value = value) %>% 
+      group_by(Gen, metric, region) %>% 
+      summarise(pv = PropVariation(value),
+                cv = sd(value) / mean(value),
+                avg = mean(value))
+    
+    test2 <- tmp$N %>%
+      group_by(Gen, metric) %>% 
+      summarise(pv = PropVariation(value),
+                cv = sd(value) / mean(value),
+                avg = mean(value),
+                region = "ALL")
+    
+    precision <- bind_rows(test1, test2) %>% 
+      mutate(gam_scale = tmp$params$model)
 
 
 
