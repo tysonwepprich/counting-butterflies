@@ -92,7 +92,7 @@ gdd <- gdd %>%
 #   facet_wrap(~region, ncol = 2)
 # plt
 
-models <- "both"#c("doy", "gdd")
+models <- "both" #c("doy", "gdd")
 cutoff <- "loose" #c("adapt","strict", "loose")
 years <- "all"  #c("all", "train", "test")
 params <- expand.grid(species$CommonName, models, cutoff, years,
@@ -286,7 +286,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                             }
                             
                             if(model == "doy"){
-                              mod1 <- safe_gam(Total ~ 
+                              mod <- safe_gam(Total ~ 
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
@@ -302,7 +302,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                             }
                             
                             if(model == "both"){
-                              mod2 <- safe_gam(Total ~ 
+                              mod <- safe_gam(Total ~ 
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
@@ -359,7 +359,7 @@ traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>%
   filter(UseMismatch == "y") %>% 
   select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
 
-fs <- list.files("OHGAMS/separates", full.names = TRUE)
+fs <- list.files("OHGAMS/all", full.names = TRUE)
 # fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
 # fs <- fs[c(15, 16, 111, 112)]
 # mixmod parameters to run for each species
@@ -393,7 +393,7 @@ outfiles <- foreach(sim = 1:length(fs),
                       print(f)
                       spp <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
                       spp <- stringr::str_split(string = spp, pattern = coll("."), 4) %>% map(1) %>% unlist()
-                      # if(spp %in% traits$CommonName){
+                      if(spp %in% traits$CommonName){
                         
                         tmp <- readRDS(f)
                         pars <- tmp$params
@@ -491,7 +491,7 @@ outfiles <- foreach(sim = 1:length(fs),
                             adjcounts$region <- "ALL"
                           }
                           
-                          if (param$gam_scale == "GDD"){
+                          if (param$gam_scale %in% c("GDD", "BOTH")){
                             adjcounts$Timescale <- adjcounts$AccumDD
                           } else if (param$gam_scale == "DOY"){
                             adjcounts$Timescale <- adjcounts$DOY
@@ -583,7 +583,42 @@ outfiles <- foreach(sim = 1:length(fs),
                         
                         
                         return(sim)
-                      # }else{
-                        # return(sim)
-                      # }
+                      }else{
+                        
+                        # for species not using mixture models
+                        # still want population index using GAMs
+                        tmp <- readRDS(f)
+                        pars <- tmp$params
+                        mod <- tmp$gammod
+                        counts <- tmp$datGAM
+                        
+                        # issue with near infinite gam predictions, 
+                        # try removing siteyears with very few counts
+                        # happened at beginning of season, might need zero anchoring
+                        counts <- counts %>% 
+                          filter(YearTotal > 1, SurvSeen > 1) %>% 
+                          droplevels()
+
+                        preds <- gdd %>% 
+                          mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
+                          filter(SiteYear %in% unique(counts$SiteYear)) %>%
+                          group_by(SiteID, Year) %>% 
+                          filter(DOY %in% (seq(90, 305, 4) + sample.int(n=3, size=54, replace=TRUE))) %>% 
+                          ungroup() %>% 
+                          mutate(zlistlength = 0,
+                                 ztemperature = 0,
+                                 zduration = 0,
+                                 RegYear = paste(region, Year, sep = "_" )) 
+                        
+                        preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
+                        # tmp[["preds"]] <- preds
+                        
+                        N <- preds %>% 
+                          group_by(SiteID, Year) %>% 
+                          summarise(PopIndex = TrapezoidIndex(DOY, adjY)) %>% 
+                          mutate(Year = as.numeric(as.character(Year)))
+                        
+                        tmp[["N"]] <- N
+                        saveRDS(tmp, file = f)
+                      }
                     }
