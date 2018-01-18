@@ -22,15 +22,16 @@ library(viridis)
 theme_set(theme_bw(base_size = 12)) 
 
 
-fs <- list.files("OHGAMS/separates", full.names = TRUE)
+fs <- list.files("OHGAMS", full.names = TRUE, recursive = TRUE)
+
 pp <- stringr::str_split(string = fs, pattern = coll("/"), 3) %>% map(3)
 spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>% 
   map(1) %>% 
   unlist() %>% 
   unique()
 
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
@@ -57,12 +58,17 @@ siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"),
 gdd <- gdd %>% 
   left_join(siteGDD[, c("SiteID", "region")])
 
-
-
+outgen <- list()
+outweight <- list()
+outpops <- list()
+outprec <- list()
 for (i in 1:length(fs)){
   f <- fs[i]
   tmp <- readRDS(f)
   mod <- tmp$gammod
+  if("error" %in% class(tmp$gammod)){
+    next
+  }
   
   counts <- tmp$datGAM %>% 
     filter(YearTotal > 1, SurvSeen > 1) %>% 
@@ -121,96 +127,110 @@ for (i in 1:length(fs)){
          plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
   
 # }
-  regions <- tmp$datGAM %>% 
-    ungroup() %>% 
-    dplyr::select(SiteID, region) %>% 
-    distinct()
-  N <- tmp$N %>% 
-    ungroup() %>% 
-    dplyr::select(-region) %>% 
-    left_join(regions)
   
-  N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"), 
-                                  to = c("CN", "NE", "NW", "SW"))
-  N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
-    
-  ##### 
-      
-    # Plot of brood separation
-    weights <- N %>% 
-      spread(key = metric, value = value) %>% 
-      group_by(SiteID, Year) %>% 
-      mutate(AnnPopIndex = sum(PopIndex),
-             gen_weight = PopIndex / AnnPopIndex) %>% 
-      filter(AnnPopIndex > 20)
-    plt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-      geom_point() +
-      facet_wrap(~region, nrow = 2)
-    plt
-    
-    if(tmp$params$model == "doy"){
-      genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-        geom_point(alpha = .5) + 
-        # scale_color_viridis(discrete = TRUE) + 
-        facet_wrap(~region, scales = "free_y") +
-        ggtitle(paste0(tmp$params$species, " generation size and timing"),
-                subtitle = "modeled on calendar scale") +
-        labs(color = "Generation") +
-        labs(x = "Day of year") +
-        labs(y = "Scaled generation size")
-    }else{
-      genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-        geom_point(alpha = .5) + 
-        # scale_color_viridis(discrete = TRUE) + 
-        facet_wrap(~region, scales = "free_y") +
-        ggtitle(paste0(tmp$params$species, " generation size and timing"),
-                subtitle = "modeled on degree-day scale") +
-        labs(color = "Generation") +
-        labs(x = "Degree-days accumulated (5/30C thresholds)") +
-        labs(y = "Scaled generation size")
-    }
-    ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."), 
-           plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
-    
-    # Brood weights with zero counts added if missing estimates
-    pops <- N %>% 
+  if("N" %in% names(tmp)){
+    regions <- tmp$datGAM %>% 
       ungroup() %>% 
-      dplyr::select(region, SiteID, Year, Gen, metric, value) %>%
-      filter(metric == "PopIndex") %>% 
-      complete(nesting(region, SiteID, Year), Gen, fill = list(metric = "PopIndex", value = 0)) %>% 
-      mutate(maxgen = max(Gen)) %>% 
-      group_by(SiteID, Year) %>% 
-      mutate(AnnPopIndex = sum(value),
-             gen_weight = value / AnnPopIndex)
-    
-    
-    # test out PV metric
-    
-    PropVariation <- function(numvect){
-      reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
-      pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]))
-      return(pv)
+      dplyr::select(SiteID, region) %>% 
+      distinct()
+    if("region" %in% names(tmp$N)){
+      N <- tmp$N %>% 
+        ungroup() %>% 
+        dplyr::select(-region) %>% 
+        left_join(regions)
+    }else{
+      N <- tmp$N %>% 
+        ungroup() %>% 
+        left_join(regions)
     }
     
-    test1 <- N %>%
-      # spread(key = metric, value = value) %>% 
-      group_by(Gen, metric, region) %>% 
-      summarise(pv = PropVariation(value),
-                cv = sd(value) / mean(value),
-                avg = mean(value))
+    N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"), 
+                                to = c("CN", "NE", "NW", "SW"))
+    N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
     
-    test2 <- tmp$N %>%
-      group_by(Gen, metric) %>% 
-      summarise(pv = PropVariation(value),
-                cv = sd(value) / mean(value),
-                avg = mean(value),
-                region = "ALL")
+    ##### 
+    # no mixture model, extract Popindex only
+    pops <- N %>% 
+      mutate(gam_scale = toupper(tmp$params$model),
+             AnnPopIndex = PopIndex)
+    outpops[[length(outpops)+1]] <- pops
     
-    precision <- bind_rows(test1, test2) %>% 
-      mutate(gam_scale = tmp$params$model)
-
-
-
-
+    # mixture model performed
+    if("gen" %in% names(tmp)){
+      outgen[[length(outgen)+1]] <- gen
+      # Plot of brood separation
+      weights <- N %>% 
+        spread(key = metric, value = value) %>% 
+        group_by(SiteID, Year) %>% 
+        mutate(AnnPopIndex = sum(PopIndex),
+               gen_weight = PopIndex / AnnPopIndex) %>% 
+        filter(AnnPopIndex > 20)
+      
+      if(tmp$params$model == "doy"){
+        genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+          geom_point(alpha = .5) + 
+          # scale_color_viridis(discrete = TRUE) + 
+          facet_wrap(~region, scales = "free_y") +
+          ggtitle(paste0(tmp$params$species, " generation size and timing"),
+                  subtitle = "modeled on calendar scale") +
+          labs(color = "Generation") +
+          labs(x = "Day of year") +
+          labs(y = "Scaled generation size")
+      }else{
+        genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+          geom_point(alpha = .5) + 
+          # scale_color_viridis(discrete = TRUE) + 
+          facet_wrap(~region, scales = "free_y") +
+          ggtitle(paste0(tmp$params$species, " generation size and timing"),
+                  subtitle = "modeled on degree-day scale") +
+          labs(color = "Generation") +
+          labs(x = "Degree-days accumulated (5/30C thresholds)") +
+          labs(y = "Scaled generation size")
+      }
+      ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."), 
+             plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
+      
+      # Brood weights with zero counts added if missing estimates
+      pops <- N %>% 
+        ungroup() %>% 
+        dplyr::select(region, SiteID, Year, Gen, metric, value) %>%
+        filter(metric == "PopIndex") %>% 
+        complete(nesting(region, SiteID, Year), Gen, fill = list(metric = "PopIndex", value = 0)) %>% 
+        mutate(maxgen = max(Gen)) %>% 
+        group_by(SiteID, Year) %>% 
+        mutate(AnnPopIndex = sum(value),
+               gen_weight = value / AnnPopIndex,
+               gam_scale = toupper(tmp$params$model),
+               species = tmp$params$species)
+      
+      
+      # CV/PV metric
+      
+      test1 <- N %>%
+        # spread(key = metric, value = value) %>% 
+        group_by(Gen, metric, region) %>% 
+        summarise(pv = PropVariation(value),
+                  cv = sd(value) / mean(value),
+                  avg = mean(value))
+      
+      test2 <- tmp$N %>%
+        group_by(Gen, metric) %>% 
+        summarise(pv = PropVariation(value),
+                  cv = sd(value) / mean(value),
+                  avg = mean(value),
+                  region = "ALL")
+      
+      precision <- bind_rows(test1, test2) %>% 
+        mutate(gam_scale = toupper(tmp$params$model),
+               species = tmp$params$species)
+      
+      outweight[[length(outweight)+1]] <- weights
+      outpops[[length(outpops)+1]] <- pops
+      outprec[[length(outprec)+1]] <- precision
+      
+      
+    } # close if gen exists in tmp
+  } # close if N exists in tmp
+} # close fs loop
 
 
