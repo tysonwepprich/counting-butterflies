@@ -1,5 +1,12 @@
 # Functions for population estimation
 
+# calculate Proportional variation (similar to CV)
+PropVariation <- function(numvect){
+  reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
+  pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]))
+  return(pv)
+}
+
 # UKBMS count index approximation
 TrapezoidIndex <- function(timescale, counts){
   dat <- data.frame(t = timescale, y = counts)
