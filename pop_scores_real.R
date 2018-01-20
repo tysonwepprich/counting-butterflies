@@ -19,7 +19,7 @@ library(purrr)
 library(mixsmsn)
 library(stringr)
 library(viridis)
-theme_set(theme_bw(base_size = 12)) 
+theme_set(theme_bw(base_size = 14)) 
 
 
 fs <- list.files("OHGAMS", full.names = TRUE, recursive = TRUE)
@@ -30,8 +30,8 @@ spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>%
   unlist() %>% 
   unique()
 
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
@@ -64,6 +64,14 @@ outpops <- list()
 outprec <- list()
 for (i in 1:length(fs)){
   f <- fs[i]
+  
+  pp <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
+  spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>% 
+    map(1) %>% unlist()
+  if(spp %in% c("Baltimore", "Leonard's Skipper")){
+    next
+  }
+  
   tmp <- readRDS(f)
   mod <- tmp$gammod
   if("error" %in% class(tmp$gammod)){
@@ -101,12 +109,23 @@ for (i in 1:length(fs)){
                                     to = c("CN", "NE", "NW", "SW"))
   preds$region <- factor(preds$region, levels = c("NW", "NE", "SW", "CN"))
   
+  # outliers
+  outs <- tmp$datGAM %>% 
+    filter(Total > 0) %>% 
+    dplyr::select(AccumDD, DOY, region) %>% 
+    filter(complete.cases(.))
+  
+  outs$region <- plyr::mapvalues(outs$region, from = c("NE", "NW", "CN", "SW"), 
+                                  to = c("CN", "NE", "NW", "SW"))
+  outs$region <- factor(outs$region, levels = c("NW", "NE", "SW", "CN"))
+  
   
   if(tmp$params$model == "doy"){
     gamplt <- ggplot(preds, aes(x = DOY, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
-      facet_wrap(~region, scales = "free_y") +
+      facet_wrap(~region, ncol = 2) +
+      geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE, alpha = 0.5) +
       ggtitle(paste0(tmp$params$species, " seasonal phenology"),
               subtitle = "modeled on calendar scale") +
       labs(color = "Total degree-days\n for site and year") +
@@ -116,7 +135,8 @@ for (i in 1:length(fs)){
     gamplt <- ggplot(preds, aes(x = AccumDD, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
-      facet_wrap(~region, scales = "free_y") +
+      facet_wrap(~region, ncol = 2) +
+      geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
       ggtitle(tmp$params$species,
               subtitle = "modeled on degree-day scale") +
       labs(color = "Total degree-days\n for site and year") +
@@ -132,6 +152,7 @@ for (i in 1:length(fs)){
     regions <- tmp$datGAM %>% 
       ungroup() %>% 
       dplyr::select(SiteID, region) %>% 
+      filter(complete.cases(.)) %>% 
       distinct()
     if("region" %in% names(tmp$N)){
       N <- tmp$N %>% 
@@ -149,28 +170,25 @@ for (i in 1:length(fs)){
     N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
     
     ##### 
-    # no mixture model, extract Popindex only
-    pops <- N %>% 
-      mutate(gam_scale = toupper(tmp$params$model),
-             AnnPopIndex = PopIndex)
-    outpops[[length(outpops)+1]] <- pops
-    
+
     # mixture model performed
     if("gen" %in% names(tmp)){
-      outgen[[length(outgen)+1]] <- gen
+      outgen[[length(outgen)+1]] <- tmp$gen
       # Plot of brood separation
       weights <- N %>% 
         spread(key = metric, value = value) %>% 
         group_by(SiteID, Year) %>% 
         mutate(AnnPopIndex = sum(PopIndex),
                gen_weight = PopIndex / AnnPopIndex) %>% 
-        filter(AnnPopIndex > 20)
+        ungroup() %>% 
+        mutate(zpopindex = AnnPopIndex / max(AnnPopIndex))
       
       if(tmp$params$model == "doy"){
         genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-          geom_point(alpha = .5) + 
+          geom_point(aes(alpha = zpopindex)) + 
           # scale_color_viridis(discrete = TRUE) + 
-          facet_wrap(~region, scales = "free_y") +
+          facet_wrap(~region, ncol = 2) +
+          geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
           ggtitle(paste0(tmp$params$species, " generation size and timing"),
                   subtitle = "modeled on calendar scale") +
           labs(color = "Generation") +
@@ -178,9 +196,10 @@ for (i in 1:length(fs)){
           labs(y = "Scaled generation size")
       }else{
         genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-          geom_point(alpha = .5) + 
+          geom_point(aes(alpha = zpopindex)) + 
           # scale_color_viridis(discrete = TRUE) + 
-          facet_wrap(~region, scales = "free_y") +
+          facet_wrap(~region, ncol = 2) +
+          geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
           ggtitle(paste0(tmp$params$species, " generation size and timing"),
                   subtitle = "modeled on degree-day scale") +
           labs(color = "Generation") +
@@ -229,8 +248,24 @@ for (i in 1:length(fs)){
       outprec[[length(outprec)+1]] <- precision
       
       
+    }else{
+      # no mixture model, extract Popindex only
+      pops <- N %>% 
+        mutate(gam_scale = toupper(tmp$params$model),
+               AnnPopIndex = PopIndex)
+      outpops[[length(outpops)+1]] <- pops
+      
     } # close if gen exists in tmp
   } # close if N exists in tmp
 } # close fs loop
+
+allgen <- bind_rows(outgen)
+allweight <- bind_rows(outweight)
+allpops <- bind_rows(outpops)
+allprec <- bind_rows(outprec)
+saveRDS(allgen, "allgen.rds")
+saveRDS(allweight, "allweight.rds")
+saveRDS(allpops, "allpops.rds")
+saveRDS(allprec, "allprec.rds")
 
 

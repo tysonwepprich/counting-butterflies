@@ -356,7 +356,7 @@ if(.Platform$OS.type == "windows"){
 # Check errors in baltimore and leonard's
 
 traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>% 
-  filter(UseMismatch == "y") %>% 
+  filter(UseMV == "y") %>% 
   select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
 
 fs <- list.files("OHGAMS/all", full.names = TRUE)
@@ -364,7 +364,7 @@ fs <- list.files("OHGAMS/all", full.names = TRUE)
 # fs <- fs[c(15, 16, 111, 112)]
 # mixmod parameters to run for each species
 mixmod <- "hom" # c("hom", "het", "skew")
-mod_region <- "ALL" # c("ALL", "reg4")
+mod_region <- c("ALL", "reg4")
 modparams <- list(mixmod = mixmod, mod_region = mod_region)
 modparams <- expand.grid(modparams)
 
@@ -482,93 +482,96 @@ outfiles <- foreach(sim = 1:length(fs),
                         
                         
                         # outgen <- list()
-                        # outN <- list()
-                        # for (p in 1:nrow(params)){
-                          # param <- params[p, ]
-                          param <- params
-                          adjcounts <- preds
-                          if (param$mod_region == "ALL"){
-                            adjcounts$region <- "ALL"
-                          }
-                          
-                          if (param$gam_scale %in% c("GDD", "BOTH")){
-                            adjcounts$Timescale <- adjcounts$AccumDD
-                          } else if (param$gam_scale == "DOY"){
-                            adjcounts$Timescale <- adjcounts$DOY
-                          }
-                          
-                          results <- adjcounts %>%
-                            group_by(region) %>% 
-                            do(mixmods = CompareMixMods(dat = ., param = param))
-                          
-                          genright <- results %>% 
-                            do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region)) %>% 
-                            unnest()
-                          
-                          siteresults <- results %>%
-                            do(GenClass = AssignGeneration(mixmod = .$mixmods, 
-                                                           dat = adjcounts, 
-                                                           param = param,
-                                                           reg = .$region)) %>% 
-                            unnest()
-                          
-                          ngen <- genright %>% 
-                            group_by(region) %>% 
-                            mutate(aicpick = maxgen[which(within_model_aic == 0)][1],
-                                   bicpick = maxgen[which(within_model_bic == 0)][1]) %>% 
-                            filter(bicpick == maxgen) %>% 
-                            slice(1L) %>% 
-                            dplyr::select(maxgen, mixmod_flag, aic, bic, badmixmod:bicpick)
-                          ngen <- ngen %>% 
-                            bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),]) %>% 
-                            mutate(predsim = predsim)
-                          
-                          # get phenology for each SiteYear and generation for "best" maxgen
-                          siteresults$Gen <- siteresults$gen
-                          siteresults$gen <- NULL
-                          
-                          phen_est <- siteresults %>% 
-                            filter(complete.cases(.)) %>% 
-                            left_join(ngen[, c("region", "bicpick")]) %>% 
-                            filter(maxgen == bicpick) %>% 
-                            ungroup() %>% 
-                            group_by(region, SiteID, Year, Gen, Timescale) %>% 
-                            summarise(Total = sum(count)) %>% 
-                            group_by(region, SiteID, Year, Gen) %>% 
-                            do(Summ_curve(t = .$Timescale, y = .$Total)) %>% 
-                            group_by(SiteID, Year) %>%
-                            mutate(gen_weight = estN / sum(estN))
-                          
-                          # do population index in terms of DOY like UKBMS
-                          N_est <- siteresults %>% 
-                            filter(complete.cases(.)) %>% 
-                            left_join(ngen[, c("region", "bicpick")]) %>% 
-                            filter(maxgen == bicpick) %>% 
-                            ungroup() %>% 
-                            group_by(SiteID, Year, Gen, DOY) %>% 
-                            summarise(Total = sum(count)) %>% 
-                            group_by(SiteID, Year, Gen) %>% 
-                            summarise(PopIndex = TrapezoidIndex(DOY, Total)) %>% 
-                            right_join(phen_est) %>% 
-                            group_by(Gen) %>% 
-                            mutate(meanmu = mean(curve_mean)) %>% 
-                            group_by(SiteID, Gen) %>% 
-                            mutate(Site_RE = mean(curve_mean) - meanmu) %>% 
-                            group_by(Year, Gen) %>% 
-                            mutate(Year_RE = mean(curve_mean) - meanmu) %>% 
-                            dplyr::select(-estN, -meanmu) %>%
-                            ungroup() %>% 
-                            mutate(Year = as.numeric(as.character(Year)))
-                          
-                          N_est <- N_est %>% 
-                            bind_cols(param[rep(seq_len(nrow(param)), each= nrow(N_est)),]) %>% 
-                            mutate(predsim = predsim)
-                          
-                          outgen[[predsim]] <- ngen
-                          outN[[predsim]] <- N_est
-
+                          # outN <- list()
+                          for (p in 1:nrow(params)){
+                            param <- params[p, ]
+                            # param <- params
+                            adjcounts <- preds
+                            if (param$mod_region == "ALL"){
+                              adjcounts$region <- "ALL"
+                            }
+                            
+                            if (param$gam_scale %in% c("GDD", "BOTH")){
+                              adjcounts$Timescale <- adjcounts$AccumDD
+                            } else if (param$gam_scale == "DOY"){
+                              adjcounts$Timescale <- adjcounts$DOY
+                            }
+                            
+                            results <- adjcounts %>%
+                              group_by(region) %>% 
+                              do(mixmods = CompareMixMods(dat = ., param = param))
+                            
+                            genright <- results %>% 
+                              do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region)) %>% 
+                              unnest()
+                            
+                            siteresults <- results %>%
+                              do(GenClass = AssignGeneration(mixmod = .$mixmods, 
+                                                             dat = adjcounts, 
+                                                             param = param,
+                                                             reg = .$region)) %>% 
+                              unnest()
+                            
+                            ngen <- genright %>% 
+                              group_by(region) %>% 
+                              mutate(aicpick = maxgen[which(within_model_aic == 0)][1],
+                                     bicpick = maxgen[which(within_model_bic == 0)][1]) %>% 
+                              filter(bicpick == maxgen) %>% 
+                              slice(1L) %>% 
+                              dplyr::select(maxgen, mixmod_flag, aic, bic, badmixmod:bicpick)
+                            ngen <- ngen %>% 
+                              bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),]) %>% 
+                              mutate(predsim = predsim)
+                            
+                            # get phenology for each SiteYear and generation for "best" maxgen
+                            siteresults$Gen <- siteresults$gen
+                            siteresults$gen <- NULL
+                            
+                            phen_est <- siteresults %>% 
+                              filter(complete.cases(.)) %>% 
+                              left_join(ngen[, c("region", "bicpick")]) %>% 
+                              filter(maxgen == bicpick) %>% 
+                              ungroup() %>% 
+                              group_by(region, SiteID, Year, Gen, Timescale) %>% 
+                              summarise(Total = sum(count)) %>% 
+                              group_by(region, SiteID, Year, Gen) %>% 
+                              do(Summ_curve(t = .$Timescale, y = .$Total)) %>% 
+                              group_by(SiteID, Year) %>%
+                              mutate(gen_weight = estN / sum(estN))
+                            
+                            # do population index in terms of DOY like UKBMS
+                            N_est <- siteresults %>% 
+                              filter(complete.cases(.)) %>% 
+                              left_join(ngen[, c("region", "bicpick")]) %>% 
+                              filter(maxgen == bicpick) %>% 
+                              ungroup() %>% 
+                              group_by(region, SiteID, Year, Gen, DOY) %>% 
+                              summarise(Total = sum(count)) %>% 
+                              group_by(region, SiteID, Year, Gen) %>% 
+                              summarise(PopIndex = TrapezoidIndex(DOY, Total)) %>% 
+                              ungroup() %>% 
+                              tidyr::complete(Gen, nesting(region, SiteID, Year), 
+                                       fill = list(PopIndex = 0)) %>% 
+                              left_join(phen_est) %>% 
+                              group_by(Gen) %>% 
+                              mutate(meanmu = mean(curve_mean, na.rm = TRUE)) %>% 
+                              group_by(SiteID, Gen) %>% 
+                              mutate(Site_RE = mean(curve_mean, na.rm = TRUE) - meanmu) %>% 
+                              group_by(Year, Gen) %>% 
+                              mutate(Year_RE = mean(curve_mean, na.rm = TRUE) - meanmu) %>% 
+                              dplyr::select(-estN, -meanmu) %>%
+                              ungroup() %>% 
+                              mutate(Year = as.numeric(as.character(Year)))
+                            
+                            N_est <- N_est %>% 
+                              bind_cols(param[rep(seq_len(nrow(param)), each= nrow(N_est)),]) %>% 
+                              mutate(predsim = predsim)
+                            
+                            outgen[[length(outgen)+1]] <- ngen
+                            outN[[length(outN)+1]] <- N_est
+                          } # close p
                         } # close predsim
-                          
+                        
                         gen <- bind_rows(outgen)
                         N <- bind_rows(outN) %>% 
                           tidyr::gather(key = "metric", value = "value", PopIndex, curve_mean:Year_RE) %>% 
@@ -584,41 +587,41 @@ outfiles <- foreach(sim = 1:length(fs),
                         
                         return(sim)
                       }else{
-                        
-                        # for species not using mixture models
-                        # still want population index using GAMs
-                        tmp <- readRDS(f)
-                        pars <- tmp$params
-                        mod <- tmp$gammod
-                        counts <- tmp$datGAM
-                        
-                        # issue with near infinite gam predictions, 
-                        # try removing siteyears with very few counts
-                        # happened at beginning of season, might need zero anchoring
-                        counts <- counts %>% 
-                          filter(YearTotal > 1, SurvSeen > 1) %>% 
-                          droplevels()
-
-                        preds <- gdd %>% 
-                          mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
-                          filter(SiteYear %in% unique(counts$SiteYear)) %>%
-                          group_by(SiteID, Year) %>% 
-                          filter(DOY %in% (seq(90, 305, 4) + sample.int(n=3, size=54, replace=TRUE))) %>% 
-                          ungroup() %>% 
-                          mutate(zlistlength = 0,
-                                 ztemperature = 0,
-                                 zduration = 0,
-                                 RegYear = paste(region, Year, sep = "_" )) 
-                        
-                        preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
-                        # tmp[["preds"]] <- preds
-                        
-                        N <- preds %>% 
-                          group_by(SiteID, Year) %>% 
-                          summarise(PopIndex = TrapezoidIndex(DOY, adjY)) %>% 
-                          mutate(Year = as.numeric(as.character(Year)))
-                        
-                        tmp[["N"]] <- N
-                        saveRDS(tmp, file = f)
+                        next
+                        # # for species not using mixture models
+                        # # still want population index using GAMs
+                        # tmp <- readRDS(f)
+                        # pars <- tmp$params
+                        # mod <- tmp$gammod
+                        # counts <- tmp$datGAM
+                        # 
+                        # # issue with near infinite gam predictions, 
+                        # # try removing siteyears with very few counts
+                        # # happened at beginning of season, might need zero anchoring
+                        # counts <- counts %>% 
+                        #   filter(YearTotal > 1, SurvSeen > 1) %>% 
+                        #   droplevels()
+                        # 
+                        # preds <- gdd %>% 
+                        #   mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
+                        #   filter(SiteYear %in% unique(counts$SiteYear)) %>%
+                        #   group_by(SiteID, Year) %>% 
+                        #   filter(DOY %in% (seq(90, 305, 4) + sample.int(n=3, size=54, replace=TRUE))) %>% 
+                        #   ungroup() %>% 
+                        #   mutate(zlistlength = 0,
+                        #          ztemperature = 0,
+                        #          zduration = 0,
+                        #          RegYear = paste(region, Year, sep = "_" )) 
+                        # 
+                        # preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
+                        # # tmp[["preds"]] <- preds
+                        # 
+                        # N <- preds %>% 
+                        #   group_by(SiteID, Year) %>% 
+                        #   summarise(PopIndex = TrapezoidIndex(DOY, adjY)) %>% 
+                        #   mutate(Year = as.numeric(as.character(Year)))
+                        # 
+                        # tmp[["N"]] <- N
+                        # saveRDS(tmp, file = f)
                       }
                     }
