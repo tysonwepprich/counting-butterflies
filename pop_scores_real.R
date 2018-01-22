@@ -30,8 +30,8 @@ spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>%
   unlist() %>% 
   unique()
 
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))

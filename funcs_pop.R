@@ -1,5 +1,14 @@
 # Functions for population estimation
 
+round_df <- function(df, digits) {
+  nums <- vapply(df, is.numeric, FUN.VALUE = logical(1))
+  
+  df[,nums] <- round(df[,nums], digits = digits)
+  
+  (df)
+}
+
+
 # calculate Proportional variation (similar to CV)
 PropVariation <- function(numvect){
   reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
