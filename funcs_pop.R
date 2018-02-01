@@ -11,8 +11,8 @@ round_df <- function(df, digits) {
 
 # calculate Proportional variation (similar to CV)
 PropVariation <- function(numvect){
-  reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y) / max(x, y)))
-  pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]))
+  reldiff <- sapply(numvect, function(x) sapply(numvect, function(y) 1 - min(x, y, na.rm = TRUE) / max(x, y, na.rm = TRUE)))
+  pv <- mean(as.numeric(reldiff[upper.tri(reldiff)]), na.rm = TRUE)
   return(pv)
 }
 
