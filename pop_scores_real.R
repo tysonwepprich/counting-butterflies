@@ -22,7 +22,7 @@ library(viridis)
 theme_set(theme_bw(base_size = 14)) 
 
 
-fs <- list.files("OHGAMS", full.names = TRUE, recursive = TRUE)
+fs <- list.files("OHGAMS/all", full.names = TRUE, recursive = TRUE)
 
 pp <- stringr::str_split(string = fs, pattern = coll("/"), 3) %>% map(3)
 spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>% 
@@ -58,6 +58,17 @@ siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"),
 gdd <- gdd %>% 
   left_join(siteGDD[, c("SiteID", "region")])
 
+# get species names
+data <- readr::read_csv("data/data.trim.csv")
+data$CommonName[which(data$CommonName == "Spring/Summer Azure")] <- "Azures"
+
+# filter unidentified species
+species <- data %>% 
+  filter(CommonName %in% unique(CommonName)[1:122]) %>% 
+  group_by(CommonName, CombinedLatin) %>% 
+  summarise(n = sum(Total)) %>% 
+  arrange(n)
+
 outgen <- list()
 outweight <- list()
 outpops <- list()
@@ -68,9 +79,16 @@ for (i in 1:length(fs)){
   pp <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
   spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>% 
     map(1) %>% unlist()
-  if(spp %in% c("Baltimore", "Leonard's Skipper")){
-    next
-  }
+  
+  latin <- species %>% 
+    ungroup() %>% 
+    filter(CommonName == spp) %>% 
+    select(CombinedLatin) %>% 
+    as.character()
+  
+  # if(spp %in% c("Baltimore", "Leonard's Skipper")){
+  #   next
+  # }
   
   tmp <- readRDS(f)
   mod <- tmp$gammod
@@ -125,9 +143,9 @@ for (i in 1:length(fs)){
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
       facet_wrap(~region, ncol = 2) +
-      geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE, alpha = 0.5) +
-      ggtitle(paste0(tmp$params$species, " seasonal phenology"),
-              subtitle = "modeled on calendar scale") +
+      geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE, alpha = 0.3) +
+      ggtitle(paste0(tmp$params$species, " (", latin, ")"),
+              subtitle = "seasonal phenology modeled on calendar scale") +
       labs(color = "Total degree-days\n for site and year") +
       labs(x = "Day of year") +
       labs(y = "Scaled phenology (model predictions)")
@@ -136,9 +154,9 @@ for (i in 1:length(fs)){
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
       facet_wrap(~region, ncol = 2) +
-      geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
-      ggtitle(tmp$params$species,
-              subtitle = "modeled on degree-day scale") +
+      geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.3) +
+      ggtitle(paste0(tmp$params$species, " (", latin, ")"),
+              subtitle = "seasonal phenology modeled on degree-day scale") +
       labs(color = "Total degree-days\n for site and year") +
       labs(x = "Degree-days accumulated (5/30C thresholds)") +
       labs(y = "Scaled phenology (model predictions)")
@@ -147,116 +165,116 @@ for (i in 1:length(fs)){
          plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
   
 # }
-  
-  if("N" %in% names(tmp)){
-    regions <- tmp$datGAM %>% 
-      ungroup() %>% 
-      dplyr::select(SiteID, region) %>% 
-      filter(complete.cases(.)) %>% 
-      distinct()
-    if("region" %in% names(tmp$N)){
-      N <- tmp$N %>% 
-        ungroup() %>% 
-        dplyr::select(-region) %>% 
-        left_join(regions)
-    }else{
-      N <- tmp$N %>% 
-        ungroup() %>% 
-        left_join(regions)
-    }
-    
-    N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"), 
-                                to = c("CN", "NE", "NW", "SW"))
-    N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
-    
-    ##### 
-
-    # mixture model performed
-    if("gen" %in% names(tmp)){
-      outgen[[length(outgen)+1]] <- tmp$gen
-      # Plot of brood separation
-      weights <- N %>% 
-        spread(key = metric, value = value) %>% 
-        group_by(SiteID, Year) %>% 
-        mutate(AnnPopIndex = sum(PopIndex),
-               gen_weight = PopIndex / AnnPopIndex) %>% 
-        ungroup() %>% 
-        mutate(zpopindex = AnnPopIndex / max(AnnPopIndex))
-      
-      if(tmp$params$model == "doy"){
-        genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-          geom_point(aes(alpha = zpopindex)) + 
-          # scale_color_viridis(discrete = TRUE) + 
-          facet_wrap(~region, ncol = 2) +
-          geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
-          ggtitle(paste0(tmp$params$species, " generation size and timing"),
-                  subtitle = "modeled on calendar scale") +
-          labs(color = "Generation") +
-          labs(x = "Day of year") +
-          labs(y = "Scaled generation size")
-      }else{
-        genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
-          geom_point(aes(alpha = zpopindex)) + 
-          # scale_color_viridis(discrete = TRUE) + 
-          facet_wrap(~region, ncol = 2) +
-          geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
-          ggtitle(paste0(tmp$params$species, " generation size and timing"),
-                  subtitle = "modeled on degree-day scale") +
-          labs(color = "Generation") +
-          labs(x = "Degree-days accumulated (5/30C thresholds)") +
-          labs(y = "Scaled generation size")
-      }
-      ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."), 
-             plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
-      
-      # Brood weights with zero counts added if missing estimates
-      pops <- N %>% 
-        ungroup() %>% 
-        dplyr::select(region, SiteID, Year, Gen, metric, value) %>%
-        filter(metric == "PopIndex") %>% 
-        complete(nesting(region, SiteID, Year), Gen, fill = list(metric = "PopIndex", value = 0)) %>% 
-        mutate(maxgen = max(Gen)) %>% 
-        group_by(SiteID, Year) %>% 
-        mutate(AnnPopIndex = sum(value),
-               gen_weight = value / AnnPopIndex,
-               gam_scale = toupper(tmp$params$model),
-               species = tmp$params$species)
-      
-      
-      # CV/PV metric
-      
-      test1 <- N %>%
-        # spread(key = metric, value = value) %>% 
-        group_by(Gen, metric, region) %>% 
-        summarise(pv = PropVariation(value),
-                  cv = sd(value) / mean(value),
-                  avg = mean(value))
-      
-      test2 <- tmp$N %>%
-        group_by(Gen, metric) %>% 
-        summarise(pv = PropVariation(value),
-                  cv = sd(value) / mean(value),
-                  avg = mean(value),
-                  region = "ALL")
-      
-      precision <- bind_rows(test1, test2) %>% 
-        mutate(gam_scale = toupper(tmp$params$model),
-               species = tmp$params$species)
-      
-      outweight[[length(outweight)+1]] <- weights
-      outpops[[length(outpops)+1]] <- pops
-      outprec[[length(outprec)+1]] <- precision
-      
-      
-    }else{
-      # no mixture model, extract Popindex only
-      pops <- N %>% 
-        mutate(gam_scale = toupper(tmp$params$model),
-               AnnPopIndex = PopIndex)
-      outpops[[length(outpops)+1]] <- pops
-      
-    } # close if gen exists in tmp
-  } # close if N exists in tmp
+  # 
+  # if("N" %in% names(tmp)){
+  #   regions <- tmp$datGAM %>% 
+  #     ungroup() %>% 
+  #     dplyr::select(SiteID, region) %>% 
+  #     filter(complete.cases(.)) %>% 
+  #     distinct()
+  #   if("region" %in% names(tmp$N)){
+  #     N <- tmp$N %>% 
+  #       ungroup() %>% 
+  #       dplyr::select(-region) %>% 
+  #       left_join(regions)
+  #   }else{
+  #     N <- tmp$N %>% 
+  #       ungroup() %>% 
+  #       left_join(regions)
+  #   }
+  #   
+  #   N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"), 
+  #                               to = c("CN", "NE", "NW", "SW"))
+  #   N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
+  #   
+  #   ##### 
+  # 
+  #   # mixture model performed
+  #   if("gen" %in% names(tmp)){
+  #     outgen[[length(outgen)+1]] <- tmp$gen
+  #     # Plot of brood separation
+  #     weights <- N %>% 
+  #       spread(key = metric, value = value) %>% 
+  #       group_by(SiteID, Year) %>% 
+  #       mutate(AnnPopIndex = sum(PopIndex),
+  #              gen_weight = PopIndex / AnnPopIndex) %>% 
+  #       ungroup() %>% 
+  #       mutate(zpopindex = AnnPopIndex / max(AnnPopIndex))
+  #     
+  #     if(tmp$params$model == "doy"){
+  #       genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+  #         geom_point(aes(alpha = zpopindex)) + 
+  #         # scale_color_viridis(discrete = TRUE) + 
+  #         facet_wrap(~region, ncol = 2) +
+  #         geom_rug(data = outs, aes(x = DOY), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
+  #         ggtitle(paste0(tmp$params$species, " generation size and timing"),
+  #                 subtitle = "modeled on calendar scale") +
+  #         labs(color = "Generation") +
+  #         labs(x = "Day of year") +
+  #         labs(y = "Scaled generation size")
+  #     }else{
+  #       genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
+  #         geom_point(aes(alpha = zpopindex)) + 
+  #         # scale_color_viridis(discrete = TRUE) + 
+  #         facet_wrap(~region, ncol = 2) +
+  #         geom_rug(data = outs, aes(x = AccumDD), sides="b", inherit.aes = FALSE,  alpha = 0.5) +
+  #         ggtitle(paste0(tmp$params$species, " generation size and timing"),
+  #                 subtitle = "modeled on degree-day scale") +
+  #         labs(color = "Generation") +
+  #         labs(x = "Degree-days accumulated (5/30C thresholds)") +
+  #         labs(y = "Scaled generation size")
+  #     }
+  #     ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."), 
+  #            plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
+  #     
+  #     # Brood weights with zero counts added if missing estimates
+  #     pops <- N %>% 
+  #       ungroup() %>% 
+  #       dplyr::select(region, SiteID, Year, Gen, metric, value) %>%
+  #       filter(metric == "PopIndex") %>% 
+  #       complete(nesting(region, SiteID, Year), Gen, fill = list(metric = "PopIndex", value = 0)) %>% 
+  #       mutate(maxgen = max(Gen)) %>% 
+  #       group_by(SiteID, Year) %>% 
+  #       mutate(AnnPopIndex = sum(value),
+  #              gen_weight = value / AnnPopIndex,
+  #              gam_scale = toupper(tmp$params$model),
+  #              species = tmp$params$species)
+  #     
+  #     
+  #     # CV/PV metric
+  #     
+  #     test1 <- N %>%
+  #       # spread(key = metric, value = value) %>% 
+  #       group_by(Gen, metric, region) %>% 
+  #       summarise(pv = PropVariation(value),
+  #                 cv = sd(value) / mean(value),
+  #                 avg = mean(value))
+  #     
+  #     test2 <- tmp$N %>%
+  #       group_by(Gen, metric) %>% 
+  #       summarise(pv = PropVariation(value),
+  #                 cv = sd(value) / mean(value),
+  #                 avg = mean(value),
+  #                 region = "ALL")
+  #     
+  #     precision <- bind_rows(test1, test2) %>% 
+  #       mutate(gam_scale = toupper(tmp$params$model),
+  #              species = tmp$params$species)
+  #     
+  #     outweight[[length(outweight)+1]] <- weights
+  #     outpops[[length(outpops)+1]] <- pops
+  #     outprec[[length(outprec)+1]] <- precision
+  #     
+  #     
+  #   }else{
+  #     # no mixture model, extract Popindex only
+  #     pops <- N %>% 
+  #       mutate(gam_scale = toupper(tmp$params$model),
+  #              AnnPopIndex = PopIndex)
+  #     outpops[[length(outpops)+1]] <- pops
+  #     
+  #   } # close if gen exists in tmp
+  # } # close if N exists in tmp
 } # close fs loop
 
 allgen <- bind_rows(outgen)
@@ -268,4 +286,16 @@ saveRDS(allweight, "allweight.rds")
 saveRDS(allpops, "allpops.rds")
 saveRDS(allprec, "allprec.rds")
 
+allgen <- readRDS("MVallgen.rds")
+allweight <- readRDS("MVallweight.rds")
+allpops <- readRDS("MVallpops.rds")
+allprec <- readRDS("MVallprec.rds")
+
+allweight <- allweight %>% 
+  dplyr::select(SiteID, Year, Gen, region, species, curve_mean)
+moddat <- allpops %>% 
+  filter(region == "ALL") %>% 
+  filter(species != "Wild Indigo Duskywing", species != "Tawny-edged Skipper") %>% 
+  left_join(allweight) 
+saveRDS(moddat, "newMVdata.rds")
 

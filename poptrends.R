@@ -96,6 +96,18 @@ poptrend <- popmod %>%
   filter(term == "Year") %>% 
   arrange(estimate)
 
+perctrend <- function(data){
+  data <- arrange(data, Year)
+  pred <-  predict(lm(Index ~ Year, data = data))
+  last <- length(pred)
+  out <- (exp(pred[last]) - exp(pred[1]))/exp(pred[1])
+}
+
+poptrendperc <- popmod %>% 
+  group_by(species) %>% 
+  do(trend = perctrend(.)) %>% 
+  unnest()
+
 
 a <- ggplot(popmod, aes(x = Year, y = Index)) +
   geom_point()+
@@ -108,7 +120,8 @@ traits <- read.csv("data/speciesphenology.csv", header = TRUE)
 
 poptrend <- poptrend %>% 
   left_join(traits, by = c("species" = "CommonName")) %>% 
-  dplyr::select(species:p.value, CombinedLatin:HostCategory, ResStatus, WinterStage)
+  dplyr::select(species:p.value, CombinedLatin:HostCategory, ResStatus, WinterStage) %>% 
+  left_join(poptrendperc)
 write.csv(poptrend, file = "signifpoptrends.csv", row.names = FALSE)
 
 summary(lm(estimate~BroodsGAMmax + HostCategory + ResStatus + WinterStage, data = poptrend))
@@ -123,7 +136,7 @@ pops$zyear <- scale(pops$Year)[,1]
 
 popmod <- pops %>%  
   filter(Year != 1995) %>%
-  # filter(species != "Cabbage White") %>%  # with or without Cabbage White
+  filter(species != "Cabbage White") %>%  # with or without Cabbage White
   # group_by(species) %>% 
   # mutate(uniqyr = length(unique(Year))) %>%
   # filter(uniqyr >= 10) %>%
@@ -149,6 +162,10 @@ a <- ggplot(popmod, aes(x = Year, y = exp(Index))) +
   labs(y = "Collated Index (butterfly-days)")
 a
 
+
+poptrendperc <- popmod %>% 
+  do(trend = perctrend(.)) %>% 
+  unnest()
 
 # is there an effect of years since Site initiation?
 popmod <- pops %>%  
@@ -192,10 +209,179 @@ popmod <- pops %>%
   group_by(species) %>% 
   mutate(uniqyr = length(unique(Year))) %>%
   filter(uniqyr >= 5) %>% 
-  ungroup() %>% 
-  mutate(zyrsince = scale(yrsincestart))
+  # ungroup() %>% 
+  # mutate(zyrsince = scale(yrsincestart)) %>% 
+  filter(species == "Cabbage White")
 
-mod <- glmer(PopIndex ~ zyear + zyrsince +
-               (1 + zyear + zyrsince|species) + (1|SiteID) + (1|YearFact),
-             data = popmod, family = poisson(link = "log"))
+gddsite <- gdd %>% 
+  filter(Year >= 1995) %>%
+  group_by(SiteID, Year, lat, lon) %>% 
+  summarise(accumgdd = max(AccumDD)) %>% 
+  group_by(SiteID) %>% 
+  mutate(meangdd = mean(accumgdd),
+         vargdd = as.numeric(scale(accumgdd - meangdd))) %>% 
+  ungroup() %>% 
+  mutate(zlat = as.numeric(scale(lat)),
+         zmeangdd = as.numeric(scale(meangdd)))
+  
+
+popdat <- left_join(popmod, gddsite) %>% 
+  mutate(rowid = as.factor(row_number()))
+
+moddat <- popdat %>% 
+  filter(species == "Least Skipper")
+mod <- glmer(round(PopIndex) ~ zyear 
+             + zmeangdd + zyear:zmeangdd
+             + vargdd + zmeangdd:vargdd
+             #+ zyrsince 
+               + (1 + zyear + zmeangdd + zyear:zmeangdd
+                  + vargdd + zmeangdd:vargdd|species)
+             + (1 + zyear|SiteID) + (1|rowid) + (1|YearFact),
+             data = moddat, family = poisson(link = "log"))
+summary(mod)
+saveRDS(mod, "allspeciesclimtrends.rds")
+
+test <- data.frame(row.names(coef(mod)$SiteID), coef(mod)$SiteID$zyear)
+names(test) <- c("site", "trend")
+test$site <- as.numeric(as.character(test$site))
+
+
+
+mod <- glmer(round(PopIndex) ~ zyear 
+             #+ zyrsince 
+             # + (1 + zyear + zyrsince|species) 
+             + (1 + zyear|SiteID) + (1|rowid),
+             data = popdat, family = poisson(link = "log"))
+summary(mod)
+
+# pesticides
+pests <- read.csv("../NCEAS-RENCI_2014/Pesticides/pest_bfly_buff_overtime_MOA.csv") %>% 
+  mutate(Year = YEAR,
+         YearFact = as.factor(as.character(Year)),
+         SiteID = formatC(site, width = 3, format = "d", flag = "0")) %>% 
+  filter(buffer == 2000) %>% 
+  select(Year, SiteID, ag_km2_buffer, MOAuse, meanbuff_kgkm2ag) %>% 
+  group_by(Year, SiteID, ag_km2_buffer) %>% 
+  spread(MOAuse, meanbuff_kgkm2ag, fill = 0) %>% 
+  select(Year:ag_km2_buffer, her_G, ins_4)
+
+
+
+moddat2 <- left_join(moddat, pests) %>% 
+  filter(complete.cases(.)) %>% 
+  mutate(rowid = as.factor(row_number()))
+
+
+
+mod <- glmer(round(PopIndex) ~ zyear 
+             + zmeangdd + zyear:zmeangdd
+             + vargdd + zmeangdd:vargdd
+             + log(her_G)
+             # + her_G:zyear
+             # + ins_4
+             # + ins_4:zyear
+             + log(ag_km2_buffer)
+             + log(ag_km2_buffer):zyear
+             + log(ag_km2_buffer):log(her_G)
+             # + ag_km2_buffer:ins_4
+             #+ zyrsince 
+             # + (1 + zyear + zyrsince|species) 
+             + (1 + zyear|SiteID) + (1|rowid) + (1|YearFact),
+             data = moddat2, family = poisson(link = "log"))
+summary(mod)
+
+# moddat2$SiteID <- as.factor(moddat2$SiteID)
+# moddat2$rowid <- as.factor(moddat2$rowid)
+# 
+# modg <- gam(round(PopIndex) ~
+#               s(zyear) 
+#             + s(zmeangdd) + ti(zyear, zmeangdd)
+#             + s(vargdd) + ti(zmeangdd, vargdd)
+#             # + her_G
+#             # + her_G:zyear
+#             # + s(ins_4)
+#             # + ins_4:zyear
+#             # + s(ag_km2_buffer)
+#             # + ag_km2_buffer:zyear
+#             # + ag_km2_buffer:her_G
+#             # + ti(ag_km2_buffer, ins_4)
+#             + s(SiteID, bs = "re")
+#             + s(YearFact, bs = "re"),
+#             data = moddat2, family = poisson(link = "log"))
+
+
+# pesticides
+pests <- read.csv("../NCEAS-RENCI_2014/Pesticides/pest_bfly_buff_overtime_MOA.csv") %>% 
+  mutate(Year = YEAR,
+         YearFact = as.factor(as.character(Year)),
+         SiteID = formatC(site, width = 3, format = "d", flag = "0"),
+         PopIndex = kg_buff) %>% 
+  filter(buffer == 2000,
+         PopIndex > 0) %>% 
+  group_by(MOAuse, SiteID) %>% 
+  mutate(yrpersite = length(unique(Year))) %>% 
+  group_by(MOAuse, Year) %>% 
+  mutate(siteperyr = length(unique(SiteID))) %>% 
+  filter(yrpersite > 5,
+         siteperyr > 5) %>%
+  group_by(MOAuse) %>% 
+  do(CollInd(.)) %>% 
+  mutate(numzero = length(which(Index < 0)) / length(Index)) %>% 
+  filter(numzero < .6) %>% 
+  droplevels()
+
+plt <- ggplot(pests, aes(x = Year, y = Index, group = MOAuse)) +
+  geom_point() + 
+  geom_smooth() +
+  facet_wrap(~MOAuse, scales = "free")
+plt
+
+
+
+
+pests <- read.csv("../NCEAS-RENCI_2014/Pesticides/pest_bfly_buff_overtime_MOA.csv") %>% 
+  mutate(Year = YEAR,
+         YearFact = as.factor(as.character(Year)),
+         SiteID = formatC(site, width = 3, format = "d", flag = "0")) %>% 
+  filter(buffer == 2000) %>% 
+  select(Year, SiteID, ag_km2_buffer, MOAuse, meanbuff_kgkm2ag) %>% 
+  group_by(Year, SiteID, ag_km2_buffer) %>% 
+  spread(MOAuse, meanbuff_kgkm2ag, fill = 0) %>% 
+  select(Year:ag_km2_buffer, her_G, ins_4)
+
+
+
+popdat <- left_join(popdat, pests) %>% 
+  filter(complete.cases(.)) %>% 
+  mutate(rowid = as.factor(row_number()))
+  
+
+
+mod <- glmer(round(PopIndex) ~ zyear 
+             + zmeangdd + zyear:zmeangdd
+             + vargdd + zmeangdd:vargdd
+             # + her_G 
+             # + her_G:zyear
+             + ins_4
+             + ins_4:zyear
+             # + ag_km2_buffer
+             # + ag_km2_buffer:zyear
+             # + ag_km2_buffer:her_G
+             # + ag_km2_buffer:ins_4:zyear
+             #+ zyrsince 
+             # + (1 + zyear + zyrsince|species) 
+             + (1 + zyear|SiteID) + (1|rowid) + (1|YearFact),
+             data = popdat, family = poisson(link = "log"))
+summary(mod)
+
+pestdat <- popdat %>%
+  # filter(complete.cases(.)) %>% 
+  ungroup() %>% 
+  select(fun_A:ins_U)
+df <- pestdat[, sapply(pestdat, function(x) { sd(x, na.rm = TRUE) != 0} )]
+df <- df[complete.cases(df), ]
+
+
+pestpca <- prcomp(df, scale. = TRUE, center = TRUE)
+
 
