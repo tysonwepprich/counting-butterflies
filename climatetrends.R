@@ -18,7 +18,7 @@ library(purrr)
 library(mixsmsn)
 library(stringr)
 library(viridis)
-theme_set(theme_bw(base_size = 14)) 
+theme_set(theme_bw(base_size = 16)) 
 
 # gdd <- readRDS("data/dailyDD.rds")
 gdd <- readRDS("../ohiogdd/dailyDD.rds")
@@ -48,13 +48,20 @@ gdd <- gdd %>%
   left_join(siteGDD[, c("SiteID", "region")])
 
 gddyear <- gdd %>% 
-  group_by(region, Year) %>% 
+  mutate(season = ifelse(month(SiteDate) %in% c(12, 1, 2), "Winter",
+                         ifelse(month(SiteDate) %in% c(3, 4, 5), "Spring",
+                                ifelse(month(SiteDate) %in% c(6, 7, 8), "Summer", "Fall")))) %>% 
+  group_by(season, Year) %>% 
   summarise(meanT = mean((maxT + minT)/ 2))
+
+gddyear$season <- factor(gddyear$season, levels = c("Winter", "Spring", "Summer", "Fall"))
 
 tempts <- ggplot(gddyear, aes(Year, meanT)) +
   geom_point() +
-  geom_smooth() +
-  facet_wrap(~region, ncol = 2)
+  geom_smooth(method = "lm") +
+  facet_wrap(~season, ncol = 2, scales = "free_y") +
+  labs(y = "Mean daily temperature (Celsius)")
+
 tempts
 
 gddgdd <- gdd %>% 
