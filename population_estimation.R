@@ -32,8 +32,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
@@ -515,7 +515,7 @@ popdf <- readRDS("popdf.rds")
 
 
 df <- gendf %>% 
-  filter(gam_scale == "GDD", gam_smooth != "none", mixmod == "skew", pois_lam != 100)
+  filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom", pois_lam != 100)
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1
@@ -539,25 +539,13 @@ plt <- ggplot(df, aes(x = corrpop, group = Gen, color = Gen)) +
   geom_density() +
   facet_wrap(~ngen)
 plt
-
-# correlation of populations bad for earlier Generations (not simulated to be different)
-# what about if using only last generation that varies between sites with latitude?
-df <- popdf %>% 
-  rowwise() %>% 
-  filter(ngen == Gen)
-
 mod <- lm(corrpop ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + pois_lam + detprob_model + mixmod + mod_region,
-           data = df)
-summary(mod)
+           data = popdf)
 
-test <- step(object = lm(corrpop ~ 1, data = df),
-             scope = corrpop ~ (surv_missing + gam_scale + gam_smooth + ngen + death_rate + pois_lam + detprob_model + mixmod + mod_region)^2,
-             direction = "forward")
+
 
 # scores of parameter sets, one at a time
 # could use confusion matrix accuracy CI for significant differences
-
-# for phenerr, maybe split up by Gen?
 outlist <- list()
 outlist1 <- list()
 for(i in names(params)[c(4:6, 10, 11, 15, 18, 19)]){
