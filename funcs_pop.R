@@ -82,14 +82,24 @@ Simulate_Counts <- function(data, gdd){
     # filter(DOY %in% (seq(90, 293, 7) + sample.int(n=6, size=30, replace=TRUE)))
     # filter(DOY %in% (seq(90, 293, 3)))
   
+  
+  # make some years have voltinism variation
+  gddannvar <- dddat %>% 
+    group_by(SiteID, Year) %>%
+    summarise(maxgdd = max(AccumDD)) %>% 
+    group_by(Year) %>% 
+    summarise(anngdd = mean(maxgdd)) %>% 
+    mutate(zanngdd = (anngdd - min(anngdd)) / (max(anngdd) - min(anngdd)))
+  
+  
   # voltinism varying by site
   if(data$ngen == 1){
-    gen_ddreq <- 800
+    gen_ddreq <- 1000
     gen_relsize = 1
     gen_relsprd = 1
   }else{
     ngen <- data$ngen
-    gen_ddreq <- seq(600, 1600, length.out = ngen)
+    gen_ddreq <- seq(500, 2000, length.out = ngen)
     gen_relsize <- switch(as.character(data$gen_size), 
                           "equal" = rep(1, ngen),
                           "inc" = seq(1, ngen, length.out = ngen),
@@ -99,6 +109,8 @@ Simulate_Counts <- function(data, gdd){
   # simulate phenology for each generation and combine
   year_var <- rnorm(data$nyear, mean = 0, sd = data$year_mu_sd)
   site_var <- rnorm(data$nsite, mean = 0, sd = data$site_mu_sd)
+  year_Mvar <- seq(from = .5, to = 2, length.out = length(years))
+  site_Mvar <- seq(from = 100, to = 1000, length.out =  length(sites))
   
   dflist <- list()
   for(y in seq_along(years)){
@@ -109,6 +121,16 @@ Simulate_Counts <- function(data, gdd){
       site_lat <- gdd$lat[gdd$SiteID == site][1]
       site_re <- 1000 - site_lat * 25 + site_var[z]
       year_re <- year_var[y]
+      site_M <- site_Mvar[z]
+      year_M <- year_Mvar[y]
+      if(data$ngen == 1){
+        year_volt <- 1
+      }else{
+        year_volt <- gddannvar %>% 
+          filter(Year == yr) %>% 
+          select(zanngdd) %>% 
+          as.numeric()
+      }
       
       for (g in 1:data$ngen){
         simdat <- dddat %>% filter(SiteID == site, Year == yr)
@@ -122,7 +144,9 @@ Simulate_Counts <- function(data, gdd){
         df$Gen <- g
         df$Site_RE <- site_re
         df$Year_RE <- year_re
-        df$gen_weight <- gen_relsize[g] * ifelse(g == data$ngen, ((42 - df$lat) / 3.35), 1)
+        df$Site_M <- site_M
+        df$Year_M <- year_M
+        df$gen_weight <- gen_relsize[g] * ifelse(g == data$ngen, year_volt * ((42 - df$lat) / 3.35), 1)
         dflist[[length(dflist)+1]] <- df
       }
     }
@@ -130,18 +154,24 @@ Simulate_Counts <- function(data, gdd){
   dfall <- bind_rows(dflist) %>% 
     arrange(SiteID, SiteDate)
   
+  
+  
   # counting process
   counts <- dfall %>% 
-    group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, region, maxT, minT, Site_RE, Year_RE) %>% 
+    group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, region, maxT, minT, Site_RE, Year_RE, Site_M, Year_M) %>% 
     summarise(RelProp = sum(y * gen_weight),
               DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
     group_by(SiteID, Year) %>% 
     mutate(RelProp = RelProp / sum(RelProp),
            # M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
-           M = rpois(1, lambda = data$pois_lam),
+           M = rpois(1, lambda = Site_M * Year_M),
            N = rpois(length(RelProp), lambda = RelProp * M),
            Y = rbinom(length(N), size = N, prob = DP)) %>% 
     data.frame()
+  
+  # ggplot(counts, aes(x = DOY, y = N, color = lat)) + 
+  #   geom_point(alpha = .3) + 
+  #   facet_wrap(~Year)
   
   # truth
   true_weight <- dfall %>% 
@@ -153,7 +183,7 @@ Simulate_Counts <- function(data, gdd){
     do(Summ_curve(t = .$AccumDD, y = .$y))
   true_N <- counts %>% 
     ungroup() %>% 
-    dplyr::select(SiteID, Year, Site_RE, Year_RE, M) %>% 
+    dplyr::select(SiteID, Year, Site_RE, Year_RE, Site_M, Year_M, M) %>% 
     distinct()
   
   truthout <- true_weight %>% 
@@ -176,6 +206,7 @@ Adjust_Counts <- function(data, counts){
   counts$SiteID <- as.factor(counts$SiteID)
   counts$region <- as.factor(counts$region)
   counts$Year <- as.factor(as.character(counts$Year))
+  counts$RegYear <- as.factor(paste(counts$region, counts$Year, sep = "_"))
   if(data$gam_scale == "DOY"){
     counts$Timescale <- counts$DOY
   }
@@ -215,9 +246,9 @@ Adjust_Counts <- function(data, counts){
     
     if(data$detprob_model %in% c("none", "known")){
       gammod <- safe_gam(adjY ~ 
-                            # s(AccumDD, bs = "cc", k = 30) +
-                           te(lat, lon, Timescale, bs = c("tp", "cc"), k = c(5, 30), d = c(2, 1)) +
-                            s(SiteYearID, bs = "re"),
+                           te(lat, lon, Timescale, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
+                            s(SiteYearID, bs = "re") + 
+                           s(RegYear, Timescale, bs = "fs", k = 5, m = 1),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -228,8 +259,9 @@ Adjust_Counts <- function(data, counts){
     if(data$detprob_model == "covariate"){
       gammod <- safe_gam(adjY ~ 
                            s(maxT) +
-                           te(lat, lon, Timescale, bs = c("tp", "cc"), k = c(5, 30), d = c(2, 1)) +
-                           s(SiteYearID, bs = "re"),
+                           te(lat, lon, Timescale, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
+                           s(SiteYearID, bs = "re") +
+                           s(RegYear, Timescale, bs = "fs", k = 5, m = 1),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
                          data = adjcounts,
@@ -257,31 +289,31 @@ Adjust_Counts <- function(data, counts){
     mod <- gammod$result
     summod <- summary(gammod$result)
 
-    # # prediction with response, gives non-integers which makes mixmod harder
-    # adjY <- predict(gammod$result, newdata = newdata, type = "response")
-
-    # prediction with simulated counts, stochastic but integers (if n is odd)
-    Xp <- predict.gam(object = mod, newdata = newdata, type="lpmatrix") ## map coefs to fitted curves
-    beta <- coef(mod)
-    Vb   <- vcov(mod) ## posterior mean and cov of coefs
-    n <- 5 # choose number of simulations
-    mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
-    ilink <- family(mod)$linkinv
-    linklppreds <- Xp %*% t(mrand)
-    nbpreds <- apply(X = linklppreds,
-                     MARGIN = 1,
-                     FUN = function(x){
-                       # temp <- sort(x)
-                       # bounds <- quantile(1:n, probs = c(0.025, 0.975))
-                       # x <- temp[bounds[1]:bounds[2]]
-                       x <- ilink(x)
-                       x <- rnbinom(n = length(x),
-                                    mu = x,
-                                    size = mod$family$getTheta(TRUE))
-                       x <- quantile(x, .5)
-                       return(x)
-                     })
-    newdata$adjY <- nbpreds
+    # prediction with response
+    adjY <- predict(gammod$result, newdata = newdata, type = "response")
+    newdata$adjY <- qnbinom(.5, size = mod$family$getTheta(TRUE), mu = adjY)
+    # # prediction with simulated counts, stochastic but integers (if n is odd)
+    # Xp <- predict.gam(object = mod, newdata = newdata, type="lpmatrix") ## map coefs to fitted curves
+    # beta <- coef(mod)
+    # Vb   <- vcov(mod) ## posterior mean and cov of coefs
+    # n <- 5 # choose number of simulations
+    # mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+    # ilink <- family(mod)$linkinv
+    # linklppreds <- Xp %*% t(mrand)
+    # nbpreds <- apply(X = linklppreds,
+    #                  MARGIN = 1,
+    #                  FUN = function(x){
+    #                    # temp <- sort(x)
+    #                    # bounds <- quantile(1:n, probs = c(0.025, 0.975))
+    #                    # x <- temp[bounds[1]:bounds[2]]
+    #                    x <- ilink(x)
+    #                    x <- rnbinom(n = length(x),
+    #                                 mu = x,
+    #                                 size = mod$family$getTheta(TRUE))
+    #                    x <- quantile(x, .5)
+    #                    return(x)
+    #                  })
+    # newdata$adjY <- nbpreds
     
     if(data$gam_smooth == "interpolate"){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
@@ -319,7 +351,7 @@ CompareMixMods <- function(dat, param){
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
-  mvmax <- param$ngen
+  mvmax <- param$ngen + 1
   gens <- c(mvmin:mvmax)
   maxtry <- 5 # repeating smsn.mix function if errors
   # out <- as.list(mvmin:mvmax)
@@ -423,7 +455,7 @@ CompareMixMods <- function(dat, param){
   return(out)
 }
   
-RightNumGen <- function(mixmods, param, reg){
+RightNumGen <- function(mixmods, param, reg, yr){
   test <- Summ_mixmod(mixmods)
   
   # problem with model classes
@@ -443,7 +475,8 @@ RightNumGen <- function(mixmods, param, reg){
            within_model_aic = aic - min(aic, na.rm = TRUE)) %>%
     ungroup() %>% 
     mutate(right_ngen = ifelse(maxgen == param$ngen, "yes", "no"),
-           region = reg) %>% 
+           region = reg,
+           modyear = yr) %>% 
     distinct()
   
   return(best_mods)
@@ -541,11 +574,12 @@ Summ_mixmod <- function(df){
 
 
 # intending with region grouping
-AssignGeneration <- function(mixmod, dat, param, reg){
+AssignGeneration <- function(mixmod, dat, param, reg, yr){
   
   set.seed(param$seed) # use for all rows?
   dat <- dat %>%
-    filter(region == reg)
+    filter(region == reg,
+           modyear == yr)
   y <- round(dat$adjY)
   
   # df to be combined with generation classifications at the end
@@ -584,6 +618,7 @@ AssignGeneration <- function(mixmod, dat, param, reg){
                    year = lubridate::year(SiteDate)) %>% 
             filter(count > 0) %>% 
             mutate(region = reg, 
+                   modyear = yr,
                    index = param$index)
           
         }else if(modtype == "Skew.normal"){
@@ -599,16 +634,17 @@ AssignGeneration <- function(mixmod, dat, param, reg){
                    year = lubridate::year(SiteDate)) %>% 
             filter(count > 0) %>% 
             mutate(region = reg, 
+                   modyear = yr,
                    index = param$index)
         }else{
           # error statement
           outclass <- data.frame(SiteID = "999", gen = ngen,
-                                 region = reg, index = param$index)
+                                 region = reg, modyear = yr, index = param$index)
         }
       }else{
         # error statement
         outclass <- data.frame(SiteID = "999", gen = ngen,
-                               region = reg, index = param$index)
+                               region = reg, modyear = yr, index = param$index)
       }
     }
     outlist[[ngen]] <- dplyr::full_join(dat, outclass) %>% mutate(maxgen = ngen)
