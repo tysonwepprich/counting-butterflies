@@ -67,7 +67,7 @@ siteGDD <- gdd %>%
   group_by(SiteID, lat, lon) %>% 
   filter(DOY == 365) %>%
   summarise(meanGDD = mean(AccumDD))
-sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 1:4, modelNames = "EEV")
+sitemod <- densityMclust(siteGDD[,c(2:3)], G = 1:4, modelNames = "EEV")
 siteGDD$region <- as.character(sitemod$classification)
 # visualize regional clusters
 # a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
