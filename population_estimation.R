@@ -555,22 +555,59 @@ gendf <- readRDS("gendf.rds")
 phendf <- readRDS("phendf.rds")
 popdf <- readRDS("popdf.rds")
 
+
+# 1. Model pathologies
+# Mixmod errors, GAM errors, SD of mixmod really small
+test <- gendf %>% 
+  group_by(index) %>% 
+  summarise(badmixmod = max(badmixmod),
+            redundant = min(redundant, na.rm = TRUE),
+            nearzerosigma = min(nearzerosigma)) %>% 
+  left_join(params) %>% 
+  mutate(redundant = ifelse(redundant == Inf, NA, redundant))
+
+# this shows that mixture models failed to fit when group_struct == year & mod_region == reg4 & mixmod == skew
+# 21 cases of this error
+test %>% filter(badmixmod == 1) %>% data.frame()
+
+# from confusion matrix, we know overfitting of voltinism
+# just state that it's due to redundant modes / near zero sigma for modes
+test %>% filter(gam_scale == "DOY", redundant <= 10) %>% data.frame()
+
+# redundant modes correlated with sigma being very low
+ggplot(test %>% filter(gam_scale == "GDD"), aes(x = sqrt(nearzerosigma), y = redundant, group = gam_scale)) +
+  geom_point() +
+  facet_grid(gam_scale~ngen, scale = "free")
+
+# could compare previous graph with what's expected from the true counts
+
+
+# 2. 
+
+
 df <- gendf %>% 
-  filter(group_struct == "year", mod_region == "ALL", mixmod == "hom", gam_smooth == "preds_4day", gam_scale == "GDD")
+  filter(group_struct == "all", mod_region == "ALL")
 
 # NOTE: group_struct with year makes 5 rows for each simulation replicate for gendf
 # how to account for this and compare?
+# Also same issue for reg4 grouping
+
+ggplot(df, aes(x = sqrt(nearzerosigma), group = gam_scale)) +
+         geom_density() +
+         facet_grid(ngen~gam_scale, scale = "free")
+
+
 
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1
 true <- factor(df$ngen, levels = c("1", "2", "3", "4", "5"))
-pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+pred <- factor(df$aicpick, levels = c("1", "2", "3", "4", "5"))
 cfmat <- caret::confusionMatrix(pred, true)
 cfmat
 # rmse comparison for different parameters
 phendf %>% 
-  filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom") %>% 
+  # filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom") %>% 
   group_by(metric, ngen, Gen) %>% 
   summarise(RMSE = mean(rmse)) %>% 
   ggplot(aes(x = ngen, y = RMSE, group = Gen, color = Gen)) +
@@ -598,17 +635,19 @@ summary(mod)
 
 
 df <- phendf %>% 
-  filter(metric == "curve_mean") %>% 
+  filter(metric == "curve_q0.5") %>% 
+  filter(group_struct == "all", mod_region == "ALL") %>% 
+  filter(Gen != "ALL") %>% 
   mutate(death_rate = as.factor(as.character(death_rate)),
          detprob_b0 = as.factor(as.character(detprob_b0)))
 
-mod <- lm(rmse ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod + mod_region,
+mod <- lm(rmse ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod,
           data = df)
 summary(mod)
 
-test <- step(object = lm(rmse ~ 1, data = df),
-             # scope = rmse ~ (surv_missing + gam_scale + gam_smooth + detprob_model + mixmod + mod_region + group_struct)^2,
-             scope = rmse ~ (surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod + mod_region + group_struct)^2,
+test <- step(object = lm(pv ~ 1, data = df),
+             scope = pv ~ (surv_missing + gam_scale + gam_smooth + detprob_model + mixmod)^2,
+             # scope = rmse ~ (surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod + mod_region + group_struct)^2,
                 direction = "forward", k = log(nrow(df)))
 
 round_df(broom::tidy(test), 3)
@@ -650,7 +689,8 @@ phenerr <- bind_rows(outlist1) %>%
 genplt <- ggplot(generr, aes(x = varfact, y = Accuracy)) +
   geom_point() +
   geom_linerange(aes(ymin=AccuracyLower, ymax=AccuracyUpper), colour="black", width=.1) +
-  facet_wrap(~varsplit, scales = "free")
+  facet_wrap(~varsplit, scales = "free_x") +
+  expand_limits(x = 0, y = 0)
 genplt
 
 for (splt in unique(phenerr$varsplit)){
