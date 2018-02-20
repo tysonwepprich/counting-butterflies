@@ -561,6 +561,8 @@ df <- gendf %>%
 # NOTE: group_struct with year makes 5 rows for each simulation replicate for gendf
 # how to account for this and compare?
 
+# first 
+
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1

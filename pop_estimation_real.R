@@ -69,7 +69,7 @@ siteGDD <- gdd %>%
   summarise(meanGDD = mean(AccumDD))
 sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 1:4, modelNames = "EEV")
 siteGDD$region <- as.character(sitemod$classification)
-# # visualize regional clusters
+# visualize regional clusters
 # a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
 # a
 siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
@@ -92,10 +92,25 @@ gdd <- gdd %>%
 #   facet_wrap(~region, ncol = 2)
 # plt
 
-models <- "both"#c("doy", "gdd")
+# CHOOSE 10 species for methods paper
+traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>% 
+  # filter(UseMV == "y") %>% 
+  select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model) %>% 
+  filter(CommonName %in% c("American Copper", "Zabulon Skipper", "Leonard's Skipper", "Cabbage White",
+                           "Pearl Crescent", "Black Swallowtail", "Least Skipper", "Meadow Fritillary",
+                           "Viceroy", "Red-spotted Purple", "Great Spangled Fritillary", 
+                           "Hackberry Emperor", "Horace's Duskywing", "Peck's Skipper",
+                           "Northern Pearly-Eye"))
+
+
+
+
+
+
+models <- c("doy", "gdd")
 cutoff <- "loose" #c("adapt","strict", "loose")
 years <- "all"  #c("all", "train", "test")
-params <- expand.grid(species$CommonName, models, cutoff, years,
+params <- expand.grid(traits$CommonName, models, cutoff, years,
                       stringsAsFactors = FALSE)
 names(params) <- c("species", "model", "cutoff", "years")
 # params <- params[c(5),]
@@ -273,7 +288,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteID, bs = "re") +
+                                                s(SiteYear, bs = "re") +
                                                 s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
                                               # family = poisson(link = "log"),
@@ -286,11 +301,11 @@ outfiles <- foreach(sim = 1:nrow(params),
                             }
                             
                             if(model == "doy"){
-                              mod1 <- safe_gam(Total ~ 
+                              mod <- safe_gam(Total ~ 
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteID, bs = "re") +
+                                                s(SiteYear, bs = "re") +
                                                 s(RegYear, DOY, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
                                               # family = poisson(link = "log"),
@@ -302,11 +317,11 @@ outfiles <- foreach(sim = 1:nrow(params),
                             }
                             
                             if(model == "both"){
-                              mod2 <- safe_gam(Total ~ 
+                              mod <- safe_gam(Total ~ 
                                                 s(zlistlength) +
                                                 s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteID, bs = "re") +
+                                                s(SiteYear, bs = "re") +
                                                 s(Year, DOY, bs = "fs", k = 5, m = 1) +
                                                 s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
@@ -359,13 +374,14 @@ traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>%
   filter(UseMismatch == "y") %>% 
   select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
 
-fs <- list.files("OHGAMS/all", full.names = TRUE)
+fs <- list.files("OHGAMS/manuscript", full.names = TRUE)
 # fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
 # fs <- fs[c(15, 16, 111, 112)]
 # mixmod parameters to run for each species
 mixmod <- "hom" # c("hom", "het", "skew")
 mod_region <- "ALL" # c("ALL", "reg4")
-modparams <- list(mixmod = mixmod, mod_region = mod_region)
+modyear <- "ALL"
+modparams <- list(mixmod = mixmod, mod_region = mod_region, modyear = modyear)
 modparams <- expand.grid(modparams)
 
 
@@ -452,31 +468,44 @@ outfiles <- foreach(sim = 1:length(fs),
                         outN <- list()
                         for(predsim in 1:500){
                           
-                          
-                          # prediction with simulated counts, stochastic but integers (if n is odd)
-                          Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
-                          beta <- coef(mod)
-                          Vb   <- vcov(mod) ## posterior mean and cov of coefs
-                          n <- 5  #527 # choose number of simulations
-                          mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+                          adjY <- predict(mod, newdata = preds, type = "link", se.fit = TRUE)
                           ilink <- family(mod)$linkinv
-                          linklppreds <- Xp %*% t(mrand)
-                          nbpreds <- apply(X = linklppreds,
-                                           MARGIN = 1,
-                                           FUN = function(x){
-                                             # temp <- sort(x)
-                                             # bounds <- quantile(1:n, probs = c(0, 0.95))
-                                             # x <- temp[bounds[1]:bounds[2]]
-                                             x <- ilink(x)
-                                             x <- rnbinom(n = length(x),
-                                                          mu = x,
-                                                          size = mod$family$getTheta(TRUE))
-                                             x <- quantile(x, .5)
-                                             return(x)
-                                           })
+                          preds$adjY <-  map2_dbl(.x = adjY$fit, .y = adjY$se.fit, .f = function(x, y) {
+                            pred <- ilink(rnorm(n = 1, mean = x, sd = y))
+                            nbpred <- qnbinom(.5, size = mod$family$getTheta(TRUE), mu = pred)
+                            return(nbpred)
+                          })
+                          
+                          # predictions still giving ridiculous numbers at start/end of season
+                          countstart <- min(counts$DOY[which(counts$Total > 0)]) - 14
+                          countend <- max(counts$DOY[which(counts$Total > 0)]) + 14
+                          
+                          preds$adjY[which(preds$DOY < countstart | preds$DOY > countend)] <- 0
+
+                          # # prediction with simulated counts, stochastic but integers (if n is odd)
+                          # Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
+                          # beta <- coef(mod)
+                          # Vb   <- vcov(mod) ## posterior mean and cov of coefs
+                          # n <- 5  #527 # choose number of simulations
+                          # mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+                          # ilink <- family(mod)$linkinv
+                          # linklppreds <- Xp %*% t(mrand)
+                          # nbpreds <- apply(X = linklppreds,
+                          #                  MARGIN = 1,
+                          #                  FUN = function(x){
+                          #                    # temp <- sort(x)
+                          #                    # bounds <- quantile(1:n, probs = c(0, 0.95))
+                          #                    # x <- temp[bounds[1]:bounds[2]]
+                          #                    x <- ilink(x)
+                          #                    x <- rnbinom(n = length(x),
+                          #                                 mu = x,
+                          #                                 size = mod$family$getTheta(TRUE))
+                          #                    x <- quantile(x, .5)
+                          #                    return(x)
+                          #                  })
                           
                           
-                          preds$adjY <- nbpreds
+                          # preds$adjY <- nbpreds
                         # preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
                         # tmp[["preds"]] <- preds
                         
@@ -491,6 +520,10 @@ outfiles <- foreach(sim = 1:length(fs),
                             adjcounts$region <- "ALL"
                           }
                           
+                          if (param$modyear == "ALL"){
+                            adjcounts$modyear <-  "ALL"
+                          }
+                          
                           if (param$gam_scale == "GDD"){
                             adjcounts$Timescale <- adjcounts$AccumDD
                           } else if (param$gam_scale == "DOY"){
@@ -498,22 +531,23 @@ outfiles <- foreach(sim = 1:length(fs),
                           }
                           
                           results <- adjcounts %>%
-                            group_by(region) %>% 
+                            group_by(region, modyear) %>% 
                             do(mixmods = CompareMixMods(dat = ., param = param))
                           
                           genright <- results %>% 
-                            do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region)) %>% 
+                            do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region, yr = .$modyear)) %>% 
                             unnest()
                           
                           siteresults <- results %>%
                             do(GenClass = AssignGeneration(mixmod = .$mixmods, 
                                                            dat = adjcounts, 
                                                            param = param,
-                                                           reg = .$region)) %>% 
+                                                           reg = .$region,
+                                                           yr = .$modyear)) %>% 
                             unnest()
                           
                           ngen <- genright %>% 
-                            group_by(region) %>% 
+                            group_by(region, modyear) %>% 
                             mutate(aicpick = maxgen[which(within_model_aic == 0)][1],
                                    bicpick = maxgen[which(within_model_bic == 0)][1]) %>% 
                             filter(bicpick == maxgen) %>% 
@@ -532,10 +566,10 @@ outfiles <- foreach(sim = 1:length(fs),
                             left_join(ngen[, c("region", "bicpick")]) %>% 
                             filter(maxgen == bicpick) %>% 
                             ungroup() %>% 
-                            group_by(region, SiteID, Year, Gen, Timescale) %>% 
+                            group_by(region, SiteID, Year, Gen, AccumDD) %>% 
                             summarise(Total = sum(count)) %>% 
                             group_by(region, SiteID, Year, Gen) %>% 
-                            do(Summ_curve(t = .$Timescale, y = .$Total)) %>% 
+                            do(Summ_curve(t = .$AccumDD, y = .$Total)) %>% 
                             group_by(SiteID, Year) %>%
                             mutate(gen_weight = estN / sum(estN))
                           

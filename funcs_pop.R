@@ -351,7 +351,7 @@ CompareMixMods <- function(dat, param){
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
-  mvmax <- param$ngen + 1
+  mvmax <- param$ngen
   gens <- c(mvmin:mvmax)
   maxtry <- 5 # repeating smsn.mix function if errors
   # out <- as.list(mvmin:mvmax)
