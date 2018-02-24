@@ -93,12 +93,12 @@ Simulate_Counts <- function(data, gdd){
   
   
   # voltinism varying by site
-  if(data$ngen == 1){
+  ngen <- data$ngen
+  if(ngen == 1){
     gen_ddreq <- 1000
     gen_relsize = 1
     gen_relsprd = 1
   }else{
-    ngen <- data$ngen
     gen_ddreq <- seq(500, 2000, length.out = ngen)
     gen_relsize <- switch(as.character(data$gen_size), 
                           "equal" = rep(1, ngen),
@@ -164,7 +164,7 @@ Simulate_Counts <- function(data, gdd){
     group_by(SiteID, Year) %>% 
     mutate(RelProp = RelProp / sum(RelProp),
            # M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
-           M = rpois(1, lambda = Site_M * Year_M),
+           M = rpois(1, lambda = Site_M * Year_M), # should also multiply by ngen to standardize M in each gen, but overlooked
            N = rpois(length(RelProp), lambda = RelProp * M),
            Y = rbinom(length(N), size = N, prob = DP)) %>% 
     data.frame()
@@ -351,7 +351,7 @@ CompareMixMods <- function(dat, param){
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
-  mvmax <- param$ngen
+  mvmax <- param$ngen # tried ngen + 1 in simulation and saw overfitting
   gens <- c(mvmin:mvmax)
   maxtry <- 5 # repeating smsn.mix function if errors
   # out <- as.list(mvmin:mvmax)
