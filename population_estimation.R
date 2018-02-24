@@ -15,6 +15,9 @@ library(lubridate)
 library(mclust)
 library(mixsmsn)
 library(caret)
+library(viridis)
+theme_set(theme_bw(base_size = 14)) 
+
 
 # for parallel simulations with control over seed for reproducibility
 # need different packages for windows computers
@@ -575,11 +578,41 @@ test %>% filter(badmixmod == 1) %>% data.frame()
 test %>% filter(gam_scale == "DOY", redundant <= 10) %>% data.frame()
 
 # redundant modes correlated with sigma being very low
-ggplot(test %>% filter(gam_scale == "GDD"), aes(x = sqrt(nearzerosigma), y = redundant, group = gam_scale)) +
-  geom_point() +
+ggplot(test %>% filter(gam_scale == "DOY"), aes(x = sqrt(nearzerosigma), y = redundant, group = gam_scale)) +
+  geom_point(alpha = .1) +
   facet_grid(gam_scale~ngen, scale = "free")
 
 # could compare previous graph with what's expected from the true counts
+
+# do reg4 or year groupings help at all?
+df <- gendf %>% 
+  filter(group_struct == "year") %>%
+  filter(mod_region == "reg4") %>%
+  mutate(mismatch = bicpick - maxgen)
+
+# versus
+df <- gendf %>% 
+  filter(group_struct == "year") %>%
+  filter(mod_region == "reg4") %>%
+  group_by(index) %>% 
+  mutate(bicpick = max(bicpick),
+         maxgen = max(maxgen),
+         mismatch = bicpick - maxgen)
+
+df <- gendf %>% 
+  filter(group_struct != "year") %>%
+  filter(mod_region != "reg4")
+# 
+# mod <- lm(mismatch ~ (true_weight + ngen + region)^2, data = df)
+# summary(mod)
+
+# confusion matrix for generations classified by mixmod
+# AIC chooses too many gen, BIC better but not great especially for ngen == 1
+true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5"))
+pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+cfmat <- caret::confusionMatrix(pred, true)
+cfmat
+
 
 
 # 2. 
@@ -598,15 +631,268 @@ ggplot(df, aes(x = sqrt(nearzerosigma), group = gam_scale)) +
 
 
 
-# first 
+# first gauge gen classification as correctly selecting the max # gen in each simulation
+# really bad accuracy over all replicates!
+df <- gendf %>% 
+  group_by(index) %>% 
+  summarise(ngen = ngen[1],
+            aicpick = max(aicpick),
+            bicpick = max(bicpick)) %>% 
+  left_join(params)
+
+df <- df %>% 
+  filter(group_struct == "all")
+  filter(group_struct == "all", mod_region == "ALL", mixmod != "het", gam_scale == "GDD", gam_smooth == "preds_4day")
 
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1
 true <- factor(df$ngen, levels = c("1", "2", "3", "4", "5"))
-pred <- factor(df$aicpick, levels = c("1", "2", "3", "4", "5"))
+pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
 cfmat <- caret::confusionMatrix(pred, true)
 cfmat
+
+# scores of parameter sets, one at a time
+# could use confusion matrix accuracy CI for significant differences
+outlist <- list()
+groupset <- expand.grid(group_struct, mod_region)
+names(groupset) <- c("group_struct", "mod_region")
+for (j in 1:nrow(groupset)){
+  df <- gendf %>% 
+    filter(group_struct == groupset[j, 1],
+           mod_region == groupset[j, 2])
+  for(i in names(params)[c(4, 6:8, 11, 12, 15, 18)]){
+    p <- pull(.data = df, var = i)
+    # mixmod accuracy
+    tmpdf <- df %>% 
+      mutate(true = factor(ngen, levels = c("1", "2", "3", "4", "5")),
+             pred = factor(bicpick, levels = c("1", "2", "3", "4", "5")),
+             varsplit = i,
+             varfact = as.factor(as.character(p))) %>% 
+      group_by(varsplit, varfact) %>% 
+      do(data.frame(t(caret::confusionMatrix(.$pred, .$true)$overall))) %>% 
+      mutate(        group_struct = groupset[j, 1],
+                     mod_region = groupset[j, 2])
+    
+    outlist[[length(outlist)+1]] <- tmpdf
+    
+    # df1 <- df %>% 
+    #   filter(ngen != 1) 
+    # 
+    # p <- pull(df1, "mixmod")
+    # tmpdf1 <- df1 %>% 
+    #   mutate(true = factor(ngen, levels = c("1", "2", "3", "4", "5")),
+    #          pred = factor(bicpick, levels = c("1", "2", "3", "4", "5")),
+    #          varsplit = "mixmod",
+    #          varfact = as.factor(as.character(p))) %>% 
+    #   group_by(varsplit, varfact) %>% 
+    #   do(data.frame(t(caret::confusionMatrix(.$pred, .$true)$overall))) %>% 
+    #   mutate(        group_struct = groupset[j, 1],
+    #                  mod_region = groupset[j, 2])
+    # outlist[[length(outlist)+1]] <- tmpdf1
+  }
+}
+
+generr <- bind_rows(outlist)
+generr$varsplit <- factor(generr$varsplit, 
+                          levels = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
+                                     "gam_scale", "gam_smooth", "mixmod"))
+generr$varsplit <- plyr::mapvalues(generr$varsplit, 
+                                   from = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
+                                            "gam_scale", "gam_smooth", "mixmod"),
+                                   to = c("# Generations", "Death rate", "Detection Probability", "Missing surveys", "Detection Modeling",
+                                          "GAM timescale", "Use of GAM predictions", "Mixture model distribution"))
+generr$varfact <- factor(generr$varfact,
+                         levels = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
+                                    "1", "2", "3", "4", "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew"))
+generr$varfact <- plyr::mapvalues(generr$varfact, 
+                                   from = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
+                                            "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew"),
+                                   to = c("None", "0", "20%", "40%", "Day of year", "Degree-day", "Missing", 
+                                          "Replace\n8-day", "Replace\n4-day", "Low", "High", "Low", "High", 
+                                          "Covariate", "Known", "Equal\nvariance", "Unequal\nvariance", "Skew\nnormal"))
+
+genplt <- ggplot(generr, aes(x = varfact, y = Accuracy, group = interaction(group_struct, mod_region),
+                             color = interaction(group_struct, mod_region))) +
+  geom_point(position = position_dodge(width=0.4)) +
+  geom_linerange(aes(ymin=AccuracyLower, ymax=AccuracyUpper), position=position_dodge(width=0.4)) +
+  facet_wrap(~varsplit, scales = "free_x") +
+  expand_limits(x = 0, y = 0) +
+  scale_color_viridis(name="Grouping of data\nfor mixture models",
+                      breaks=c("all.ALL", "year.ALL", "all.reg4", "year.reg4"),
+                      labels=c("All together", "By year", "By region", "By year x region"),
+                      discrete = TRUE, begin = 0, end = .8) +
+  xlab("Variables in simulation study") +
+  ylab("Voltinism prediction accuracy\nfrom confusion matrix") +
+  theme(legend.position = c(0.85, 0.15))
+  
+genplt 
+
+ggsave(filename = paste("ConfMatrixAccuracy", "png", sep = "."), 
+       plot = genplt, device = "png", path = "plots", width = 10, height = 8, units = "in")
+
+
+
+
+
+# scores of parameter sets, one at a time
+outlist1 <- list()
+df <- phendf
+# can choose to split by ngen or not, keep it simple for results
+# for (j in 1:4){
+  # df <- phendf %>% 
+    # filter(ngen == j)
+  for(i in names(params)[c(4:8, 11, 12, 15, 19)]){
+    
+    p <- pull(df, i)
+    tmpdf <- df %>% 
+      mutate( varsplit = i,
+              varfact = as.factor(as.character(p)))  %>% 
+      group_by(varsplit, varfact, metric, Gen) %>% # add ngen here if wanted
+      summarise(RMSE = mean(pv),
+                sem = sd(pv)/sqrt(length(pv)))
+    outlist1[[length(outlist1)+1]] <- tmpdf
+  }
+  
+df <- phendf %>% 
+  filter(ngen != 1) 
+  
+  p <- pull(df, "mixmod")
+  tmpdf1 <- df %>% 
+    mutate( varsplit = "mixmod",
+            varfact = as.factor(as.character(p)))  %>% 
+    group_by(varsplit, varfact, metric, Gen) %>% 
+    summarise(RMSE = mean(pv),
+              sem = sd(pv)/sqrt(length(pv)))
+  outlist1[[length(outlist1)+1]] <- tmpdf1
+  
+# }
+
+
+# scores of parameter sets, one at a time
+outlist1 <- list()
+df <- popdf
+# for (j in 1:4){
+  # df <- popdf %>% 
+    # filter(ngen == j)
+  for(i in names(params)[c(4:8, 11, 12, 15, 18, 19)]){
+    
+    p <- pull(df, i)
+    tmpdf <- df %>% 
+      mutate( varsplit = i,
+              varfact = as.factor(as.character(p)))  %>% 
+      group_by(varsplit, varfact, Gen) %>% 
+      summarise(RMSE = mean(corrpop),
+                sem = sd(corrpop)/sqrt(length(corrpop))) %>% 
+      data.frame()
+    outlist1[[length(outlist1)+1]] <- tmpdf
+  }
+# }
+
+
+
+phenerr <- bind_rows(outlist1) %>% 
+  rowwise() %>% 
+  mutate(RMSElower = RMSE - 2 * sem,
+         RMSEupper = RMSE + 2 * sem) %>% 
+  filter(metric == "curve_mean", Gen != "ALL")
+  # filter(Gen == "ALL", 
+         # metric %in% c("curve_q0.1", "curve_q0.5", "curve_q0.9", "curve_max", "curve_mean"))
+         filter(metric %in% c("PopIndex"))
+
+
+phenerr$varsplit <- factor(phenerr$varsplit, 
+                          levels = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
+                                     "gam_scale", "gam_smooth", "mixmod", "group_struct", "mod_region"))
+phenerr$varsplit <- plyr::mapvalues(phenerr$varsplit, 
+                                   from = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
+                                            "gam_scale", "gam_smooth", "mixmod", "group_struct", "mod_region"),
+                                   to = c("Number of generations", "Death rate", "Detection Probability", "Missing surveys", "Detection Modeling",
+                                          "GAM timescale", "Use of GAM predictions", "Mixture model distribution",
+                                          "Mixture model time", "Mixture model space"))
+phenerr$varfact <- factor(phenerr$varfact,
+                         levels = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
+                                    "1", "2", "3", "4", "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew",
+                                    "all", "ALL", "year", "reg4"))
+phenerr$varfact <- plyr::mapvalues(phenerr$varfact, 
+                                  from = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
+                                           "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew", "all", "ALL", "year", "reg4"),
+                                  to = c("None", "0", "20%", "40%", "Day of year", "Degree-day", "Missing", 
+                                         "Replace\n8-day", "Replace\n4-day", "Low", "High", "Low", "High", 
+                                         "Covariate", "Known", "Equal\nvariance", "Unequal\nvariance", "Skew\nnormal",
+                                         "All years", "Statewide", "By year", "By region"))
+
+genplt <- ggplot(phenerr, aes(x = varfact, y = RMSE, group = as.factor(Gen), color = as.factor(Gen))) +
+# genplt <- ggplot(phenerr, aes(x = varfact, y = RMSE, group = metric, color = metric)) +
+  geom_point( position = position_dodge(width=0.4)) +
+  # geom_point()+
+# geom_linerange(aes(ymin=RMSElower, ymax=RMSEupper)) +
+  geom_linerange(aes(ymin=RMSElower, ymax=RMSEupper), position=position_dodge(width=0.4)) +
+  facet_wrap(~varsplit, scales = "free_x") +
+  # expand_limits(x = 0, y = 0) +
+  scale_color_viridis(
+    name="By generation",
+                      # breaks=c("curve_max", "curve_mean", "curve_q0.1", "curve_q0.5", "curve_q0.9"),
+                      # labels=c("Peak", "Weighted mean", "10th percentile", "50th percentile", "90th percentile"),
+                      discrete = TRUE, begin = 0, end = .8) +
+  xlab("Variables in simulation study") +
+  ylab("Precision of estimated phenology\nProportional Variability (PV) of mean phenology") +
+  theme(legend.position = c(0.75, 0.15))
+
+genplt 
+
+ggsave(filename = paste("PVPhenology", "png", sep = "."), 
+       plot = genplt, device = "png", path = "plots", width = 12, height = 8, units = "in")
+
+
+
+
+# for (splt in unique(phenerr$varsplit)){
+#   plt <- phenerr %>% 
+#   filter(varsplit == splt, Gen == "ALL") %>% 
+#   ggplot(aes(x = varfact, y = RMSE)) +
+#   geom_point() +
+#   scale_y_continuous(limits = c(0, NA)) +
+#   geom_linerange(aes(ymin=RMSElower, ymax=RMSEupper)) +
+#   facet_wrap(~metric, scales = "free_y")
+#   print(plt)
+# }
+
+
+# what about best combination of parameters?
+# is accuracy good?
+
+
+df <- gendf %>% 
+  filter(group_struct != "year", mod_region != "reg4", surv_missing != 0.4, gam_scale == "GDD",
+         gam_smooth != "none", detprob_model != "none", mixmod == "hom")
+
+# confusion matrix for generations classified by mixmod
+# AIC chooses too many gen, BIC better but not great especially for ngen == 1
+true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5"))
+pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+cfmat <- caret::confusionMatrix(pred, true)
+cfmat
+
+
+df <- phendf %>% 
+  filter(group_struct != "year", mod_region != "reg4", surv_missing == 0.4,
+         gam_smooth != "none", metric == "curve_mean")
+df %>% group_by(gam_smooth, detprob_model, gam_scale, mixmod) %>%
+  summarise(rmse = mean(rmse),
+            pv = mean(pv)) %>% 
+  arrange(rmse) %>% 
+  data.frame()
+
+
+df <- popdf %>% 
+  filter(group_struct != "year", mod_region != "reg4", surv_missing != 0.4, gam_scale == "GDD",
+         gam_smooth != "none", detprob_model != "none", mixmod == "hom")
+
+ggplot(df, aes(x = corrpop, group = Gen, color = Gen)) +
+  geom_density() +
+  facet_wrap(~ngen)
+
 # rmse comparison for different parameters
 phendf %>% 
   # filter(gam_scale == "GDD", gam_smooth == "preds_4day", mixmod == "hom") %>% 
@@ -631,7 +917,7 @@ df <- popdf %>%
          detprob_b0 = as.factor(as.character(detprob_b0)))
 
 mod <- lm(corrpop ~ surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod + mod_region,
-           data = df)
+          data = df)
 summary(mod)
 
 
@@ -650,63 +936,27 @@ summary(mod)
 test <- step(object = lm(pv ~ 1, data = df),
              scope = pv ~ (surv_missing + gam_scale + gam_smooth + detprob_model + mixmod)^2,
              # scope = rmse ~ (surv_missing + gam_scale + gam_smooth + ngen + death_rate + detprob_b0 + detprob_model + mixmod + mod_region + group_struct)^2,
-                direction = "forward", k = log(nrow(df)))
+             direction = "forward", k = log(nrow(df)))
 
 round_df(broom::tidy(test), 3)
 
-# scores of parameter sets, one at a time
-# could use confusion matrix accuracy CI for significant differences
-outlist <- list()
-outlist1 <- list()
-for(i in names(params)[c(4:7, 11, 12, 15, 18, 19)]){
-  p <- gendf[, i]
-  # mixmod accuracy
-  df <- gendf %>% 
-    mutate(true = factor(ngen, levels = c("1", "2", "3", "4", "5")),
-           pred = factor(bicpick, levels = c("1", "2", "3", "4", "5")),
-           varsplit = i,
-           varfact = as.factor(as.character(p))) %>% 
-    group_by(varsplit, varfact) %>% 
-    do(data.frame(t(caret::confusionMatrix(.$pred, .$true)$overall)))
-  
-  outlist[[length(outlist)+1]] <- df
-  
-  p <- phendf[, i]
-  df <- phendf %>% 
-    mutate( varsplit = i,
-            varfact = as.factor(as.character(p)))  %>% 
-    group_by(varsplit, varfact, metric, Gen) %>% 
-    summarise(RMSE = mean(rmse),
-              sem = sd(rmse)/sqrt(length(rmse))) %>% 
-    data.frame()
-  outlist1[[length(outlist1)+1]] <- df
-}
 
-generr <- bind_rows(outlist)
-phenerr <- bind_rows(outlist1) %>% 
+# switch RMSE and PV to gauge combined effects of GDD/DOY and Gen
+df <- phendf %>% 
+  filter(metric == "curve_q0.5") %>% 
+  group_by(gam_scale, ngen, Gen, metric) %>% 
+  summarise(RMSE = mean(pv),
+            sem = sd(pv)/sqrt(length(pv))) %>% 
   rowwise() %>% 
   mutate(RMSElower = RMSE - 2 * sem,
-         RMSEupper = RMSE + 2 * sem)
+         RMSEupper = RMSE + 2 * sem) %>% 
+  data.frame()
 
-genplt <- ggplot(generr, aes(x = varfact, y = Accuracy)) +
-  geom_point() +
-  geom_linerange(aes(ymin=AccuracyLower, ymax=AccuracyUpper), colour="black", width=.1) +
-  facet_wrap(~varsplit, scales = "free_x") +
-  expand_limits(x = 0, y = 0)
-genplt
-
-for (splt in unique(phenerr$varsplit)){
-  plt <- phenerr %>% 
-  filter(varsplit == splt, Gen == "ALL") %>% 
-  ggplot(aes(x = varfact, y = RMSE)) +
+ggplot(df, aes(x = ngen, y = RMSE, color = Gen)) +
   geom_point() +
   scale_y_continuous(limits = c(0, NA)) +
   geom_linerange(aes(ymin=RMSElower, ymax=RMSEupper)) +
-  facet_wrap(~metric, scales = "free_y")
-  print(plt)
-}
-
-
+  facet_wrap(~gam_scale)
 
 outdf <- bind_rows(outlist)
 saveRDS(outdf, file = "genright.rds")

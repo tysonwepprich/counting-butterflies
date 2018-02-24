@@ -109,14 +109,14 @@ traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>%
 
 models <- c("doy", "gdd")
 cutoff <- "loose" #c("adapt","strict", "loose")
-years <- "all"  #c("all", "train", "test")
+years <- c("train", "test") #"all"  #c("all", "train", "test")
 params <- expand.grid(traits$CommonName, models, cutoff, years,
                       stringsAsFactors = FALSE)
 names(params) <- c("species", "model", "cutoff", "years")
 # params <- params[c(5),]
 
 
-ncores <- 15
+ncores <- 20
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
 }else if(.Platform$OS.type == "windows"){
@@ -189,17 +189,17 @@ outfiles <- foreach(sim = 1:nrow(params),
                         datGAM <- counts %>% filter(YearTotal >= 1, SurvPerYear >= 10)
                       }
 
-                      # # years to use in GAM
-                      # if(years == "train"){
-                      #   datGAM <- datGAM %>% 
-                      #     filter(Year < 2010) %>% 
-                      #     droplevels()
-                      # }
-                      # if(years == "test"){
-                      #   datGAM <- datGAM %>% 
-                      #     filter(Year >= 2010) %>% 
-                      #     droplevels()
-                      # }
+                      # years to use in GAM
+                      if(years == "train"){
+                        datGAM <- datGAM %>%
+                          filter(Year < 2010) %>%
+                          droplevels()
+                      }
+                      if(years == "test"){
+                        datGAM <- datGAM %>%
+                          filter(Year >= 2010) %>%
+                          droplevels()
+                      }
 
                       
                       if(nrow(datGAM) == 0){
@@ -285,8 +285,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "gdd"){
                               mod <- safe_gam(Total ~ 
-                                                s(zlistlength) +
-                                                s(ztemperature) +
+                                                # s(zlistlength) +
+                                                # s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
                                                 s(SiteYear, bs = "re") +
                                                 s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
@@ -302,8 +302,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "doy"){
                               mod <- safe_gam(Total ~ 
-                                                s(zlistlength) +
-                                                s(ztemperature) +
+                                                # s(zlistlength) +
+                                                # s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
                                                 s(SiteYear, bs = "re") +
                                                 s(RegYear, DOY, bs = "fs", k = 5, m = 1),
@@ -349,7 +349,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                           outlist[["params"]] <- pars
                           outlist[["gammod"]] <- mod$result
                           outlist[["datGAM"]] <- temp
-                          saveRDS(outlist, paste(species, model, years, "rds", sep = "."))
+                          saveRDS(outlist, paste(species, model, years, "noDP", "rds", sep = "."))
                           
                         }else{
                           outlist <- list()

@@ -22,7 +22,7 @@ library(viridis)
 theme_set(theme_bw(base_size = 14)) 
 
 
-fs <- list.files("OHGAMS/all", full.names = TRUE, recursive = TRUE)
+fs <- list.files("OHGAMS/manuscript", full.names = TRUE, recursive = TRUE)
 
 pp <- stringr::str_split(string = fs, pattern = coll("/"), 3) %>% map(3)
 spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>% 
@@ -30,8 +30,8 @@ spp <- stringr::str_split(string = pp, pattern = coll("."), 4) %>%
   unlist() %>% 
   unique()
 
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
@@ -48,13 +48,17 @@ siteGDD <- gdd %>%
   group_by(SiteID, lat, lon) %>% 
   filter(DOY == 365) %>%
   summarise(meanGDD = mean(AccumDD))
-sitemod <- densityMclust(siteGDD[,c(2:3)], G = 1:4, modelNames = "EEV")
+sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 1:4, modelNames = "EEV")
+
 siteGDD$region <- as.character(sitemod$classification)
 
-###NB: these regions are wrong, but were also modeled with wrong names
-# correct below after GAM predictions from models
+
+# visualize regional clusters
+# a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
+# a
 siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
                                   to = c("NE", "NW", "CN", "SW"))
+
 gdd <- gdd %>% 
   left_join(siteGDD[, c("SiteID", "region")])
 
@@ -129,9 +133,9 @@ for (i in 1:length(fs)){
     # filter(SiteYearTotal >= 20)
     group_by(region) %>% 
     filter(SiteYear %in% sample(unique(SiteYear), 20, replace = TRUE))
-  
-  preds$region <- plyr::mapvalues(preds$region, from = c("NE", "NW", "CN", "SW"), 
-                                    to = c("CN", "NE", "NW", "SW"))
+  # 
+  # preds$region <- plyr::mapvalues(preds$region, from = c("NE", "NW", "CN", "SW"), 
+  #                                   to = c("CN", "NE", "NW", "SW"))
   preds$region <- factor(preds$region, levels = c("NW", "NE", "SW", "CN"))
   
   # outliers
@@ -140,12 +144,12 @@ for (i in 1:length(fs)){
     dplyr::select(AccumDD, DOY, region) %>% 
     filter(complete.cases(.))
   
-  outs$region <- plyr::mapvalues(outs$region, from = c("NE", "NW", "CN", "SW"), 
-                                  to = c("CN", "NE", "NW", "SW"))
+  # outs$region <- plyr::mapvalues(outs$region, from = c("NE", "NW", "CN", "SW"), 
+  #                                 to = c("CN", "NE", "NW", "SW"))
   outs$region <- factor(outs$region, levels = c("NW", "NE", "SW", "CN"))
   
   
-  if(tmp$params$model == "doy"){
+  # if(tmp$params$model == "doy"){
     gamplt <- ggplot(preds, aes(x = DOY, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
@@ -156,7 +160,9 @@ for (i in 1:length(fs)){
       labs(color = "Total degree-days\n for site and year") +
       labs(x = "Day of year") +
       labs(y = "Scaled phenology (model predictions)")
-  }else{
+    ggsave(filename = paste(tmp$params$species, tmp$params$model, "GAM", "DOY", "png", sep = "."), 
+           plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
+  # }else{
     gamplt <- ggplot(preds, aes(x = AccumDD, y = Gamma, group = SiteYear, color = SiteYearGDD)) +
       geom_path(alpha = .5) + 
       scale_color_viridis() + 
@@ -167,8 +173,8 @@ for (i in 1:length(fs)){
       labs(color = "Total degree-days\n for site and year") +
       labs(x = "Degree-days accumulated (5/30C thresholds)") +
       labs(y = "Scaled phenology (model predictions)")
-  }
-  ggsave(filename = paste(tmp$params$species, tmp$params$model, "GAM", "png", sep = "."), 
+  # }
+  ggsave(filename = paste(tmp$params$species, tmp$params$model, "GAM", "GDD", "png", sep = "."), 
          plot = gamplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
   
   
@@ -190,8 +196,8 @@ for (i in 1:length(fs)){
         left_join(regions)
     }
     
-    N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"),
-                                to = c("CN", "NE", "NW", "SW"))
+    # N$region <- plyr::mapvalues(N$region, from = c("NE", "NW", "CN", "SW"),
+    #                             to = c("CN", "NE", "NW", "SW"))
     N$region <- factor(N$region, levels = c("NW", "NE", "SW", "CN"))
     
     #####
@@ -208,7 +214,7 @@ for (i in 1:length(fs)){
         ungroup() %>%
         mutate(zpopindex = AnnPopIndex / max(AnnPopIndex))
       
-      if(tmp$params$model == "doy"){
+      # if(tmp$params$model == "doy"){
         genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
           geom_point(aes(alpha = zpopindex)) +
           # scale_color_viridis(discrete = TRUE) +
@@ -219,7 +225,7 @@ for (i in 1:length(fs)){
           labs(color = "Generation") +
           labs(x = "Day of year") +
           labs(y = "Scaled generation size")
-      }else{
+      # }else{
         genplt <- ggplot(weights, aes(x = curve_q0.5, y = gen_weight, color = as.factor(Gen))) +
           geom_point(aes(alpha = zpopindex)) +
           # scale_color_viridis(discrete = TRUE) +
@@ -230,7 +236,7 @@ for (i in 1:length(fs)){
           labs(color = "Generation") +
           labs(x = "Degree-days accumulated (5/30C thresholds)") +
           labs(y = "Scaled generation size")
-      }
+      # }
       ggsave(filename = paste(tmp$params$species, tmp$params$model, "gens", "png", sep = "."),
              plot = genplt, device = "png", path = "plots", width = 8, height = 6, units = "in")
       
@@ -252,21 +258,36 @@ for (i in 1:length(fs)){
       
       test1 <- N %>%
         # spread(key = metric, value = value) %>%
-        group_by(Gen, metric, region) %>%
+        group_by(Gen, metric, SiteID) %>%
         summarise(pv = PropVariation(value),
                   cv = sd(value) / mean(value),
-                  avg = mean(value))
+                  avg = mean(value),
+                  group = "By site")
       
-      test2 <- tmp$N %>%
+      test2 <- N %>% 
+        group_by(Gen, metric, Year) %>%
+        summarise(pv = PropVariation(value),
+                  cv = sd(value) / mean(value),
+                  avg = mean(value),
+                  group = "By year")
+      
+      test3 <- N %>%
         group_by(Gen, metric) %>%
         summarise(pv = PropVariation(value),
                   cv = sd(value) / mean(value),
                   avg = mean(value),
-                  region = "ALL")
+                  group = "all")
+
       
-      precision <- bind_rows(test1, test2) %>%
+      precision <- bind_rows(test1, test2, test3) %>%
         mutate(gam_scale = toupper(tmp$params$model),
                species = tmp$params$species)
+      
+      
+      
+      ggplot(precision %>% filter(metric == "curve_mean"), aes(x = pv, group = Gen, color = Gen)) +
+        geom_density() +
+        facet_wrap(~group, ncol = 1)
       
       outweight[[length(outweight)+1]] <- weights
       outpops[[length(outpops)+1]] <- pops
@@ -288,15 +309,17 @@ allgen <- bind_rows(outgen)
 allweight <- bind_rows(outweight)
 allpops <- bind_rows(outpops)
 allprec <- bind_rows(outprec)
-saveRDS(allgen, "MVallgen.rds")
-saveRDS(allweight, "MVallweight.rds")
-saveRDS(allpops, "MVallpops.rds")
-saveRDS(allprec, "MVallprec.rds")
 
-allgen <- readRDS("MVallgen.rds")
-allweight <- readRDS("MVallweight.rds")
-allpops <- readRDS("MVallpops.rds")
-allprec <- readRDS("MVallprec.rds")
+
+saveRDS(allgen, "MSallgen.rds")
+saveRDS(allweight, "MSallweight.rds")
+saveRDS(allpops, "MSallpops.rds")
+saveRDS(allprec, "MSallprec.rds")
+
+allgen <- readRDS("MSallgen.rds")
+allweight <- readRDS("MSallweight.rds")
+allpops <- readRDS("MSallpops.rds")
+allprec <- readRDS("MSallprec.rds")
 
 allweight <- allweight %>% 
   dplyr::select(SiteID, Year, Gen, region, species, curve_mean)
@@ -305,4 +328,11 @@ moddat <- allpops %>%
   filter(species != "Wild Indigo Duskywing", species != "Tawny-edged Skipper") %>% 
   left_join(allweight) 
 saveRDS(moddat, "newMVdata.rds")
+
+
+ggplot(allprec %>% filter(metric == "curve_mean", species == "Leonard's Skipper", region != "ALL"), aes(x = pv, group = Gen, color = Gen)) +
+  geom_density() +
+  facet_grid(species ~ gam_scale)
+  
+
 
