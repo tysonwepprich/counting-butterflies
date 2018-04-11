@@ -67,11 +67,11 @@ siteGDD <- gdd %>%
   group_by(SiteID, lat, lon) %>% 
   filter(DOY == 365) %>%
   summarise(meanGDD = mean(AccumDD))
-sitemod <- densityMclust(siteGDD[,c(2:3)], G = 1:4, modelNames = "EEV")
+sitemod <- densityMclust(scale(siteGDD[,c(2:3)]), G = 1:4, modelNames = "EEV")
 siteGDD$region <- as.character(sitemod$classification)
 # visualize regional clusters
-# a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
-# a
+a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
+a
 siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
                                   to = c("NE", "NW", "CN", "SW"))
 gdd <- gdd %>% 
@@ -116,7 +116,7 @@ names(params) <- c("species", "model", "cutoff", "years")
 # params <- params[c(5),]
 
 
-ncores <- 20
+ncores <- 30
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
 }else if(.Platform$OS.type == "windows"){
@@ -285,10 +285,10 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "gdd"){
                               mod <- safe_gam(Total ~ 
-                                                # s(zlistlength) +
-                                                # s(ztemperature) +
+                                                s(zlistlength) +
+                                                s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteYear, bs = "re") +
+                                                s(SiteID, bs = "re") +
                                                 s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
                                               # family = poisson(link = "log"),
@@ -302,10 +302,10 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "doy"){
                               mod <- safe_gam(Total ~ 
-                                                # s(zlistlength) +
-                                                # s(ztemperature) +
+                                                s(zlistlength) +
+                                                s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteYear, bs = "re") +
+                                                s(SiteID, bs = "re") +
                                                 s(RegYear, DOY, bs = "fs", k = 5, m = 1),
                                               family = nb(theta = NULL, link = "log"),
                                               # family = poisson(link = "log"),
@@ -316,22 +316,22 @@ outfiles <- foreach(sim = 1:nrow(params),
                                               control = list(maxit = 500))
                             }
                             
-                            if(model == "both"){
-                              mod <- safe_gam(Total ~ 
-                                                s(zlistlength) +
-                                                s(ztemperature) +
-                                                te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                                                s(SiteYear, bs = "re") +
-                                                s(Year, DOY, bs = "fs", k = 5, m = 1) +
-                                                s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
-                                              family = nb(theta = NULL, link = "log"),
-                                              # family = poisson(link = "log"),
-                                              data = temp,
-                                              method = "REML", 
-                                              optimizer = c("outer", "newton"), 
-                                              # gamma = 1.4, 
-                                              control = list(maxit = 500))
-                            }
+                            # if(model == "both"){
+                            #   mod <- safe_gam(Total ~ 
+                            #                     s(zlistlength) +
+                            #                     s(ztemperature) +
+                            #                     te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
+                            #                     s(SiteYear, bs = "re") +
+                            #                     s(Year, DOY, bs = "fs", k = 5, m = 1) +
+                            #                     s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
+                            #                   family = nb(theta = NULL, link = "log"),
+                            #                   # family = poisson(link = "log"),
+                            #                   data = temp,
+                            #                   method = "REML", 
+                            #                   optimizer = c("outer", "newton"), 
+                            #                   # gamma = 1.4, 
+                            #                   control = list(maxit = 500))
+                            # }
                             
                           })
                         }
@@ -349,7 +349,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                           outlist[["params"]] <- pars
                           outlist[["gammod"]] <- mod$result
                           outlist[["datGAM"]] <- temp
-                          saveRDS(outlist, paste(species, model, years, "noDP", "rds", sep = "."))
+                          saveRDS(outlist, paste(species, model, years, "DP", "rds", sep = "."))
                           
                         }else{
                           outlist <- list()
@@ -370,23 +370,21 @@ if(.Platform$OS.type == "windows"){
 # Now that GAMs fit, run through mixture models as in simulation
 # Check errors in baltimore and leonard's
 
-traits <- read.csv("data/speciesphenology.csv", header = TRUE) %>% 
-  filter(UseMismatch == "y") %>% 
-  select(CommonName, BroodsGAMmin, BroodsGAMmax, UseMV, SyncedBroods, UseMismatch, Model)
-
 fs <- list.files("OHGAMS/manuscript", full.names = TRUE)
 # fs <- fs[grep(pattern = "loose", x = fs, fixed = TRUE)]
 # fs <- fs[c(15, 16, 111, 112)]
 # mixmod parameters to run for each species
-mixmod <- "hom" # c("hom", "het", "skew")
+mixmod <- c("hom", "het", "skew")
 mod_region <- "ALL" # c("ALL", "reg4")
 modyear <- "ALL"
-modparams <- list(mixmod = mixmod, mod_region = mod_region, modyear = modyear)
+gam_smooth <- c("none", "interpolate", "preds_8day", "preds_4day")
+
+modparams <- list(mixmod = mixmod, gam_smooth = gam_smooth, mod_region = mod_region, modyear = modyear)
 modparams <- expand.grid(modparams)
 
 
 
-ncores <- 20
+ncores <- 30
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
 }else if(.Platform$OS.type == "windows"){
@@ -407,21 +405,16 @@ outfiles <- foreach(sim = 1:length(fs),
                       
                       f <- fs[sim]
                       print(f)
-                      spp <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
-                      spp <- stringr::str_split(string = spp, pattern = coll("."), 4) %>% map(1) %>% unlist()
+                      spstr <- stringr::str_split(string = f, pattern = coll("/"), 3) %>% map(3)
+                      spp <- stringr::str_split(string = spstr, pattern = coll("."), 5) %>% map(1) %>% unlist()
+                      detprob <- stringr::str_split(string = spstr, pattern = coll("."), 5) %>% map(4) %>% unlist()
+                      
                       # if(spp %in% traits$CommonName){
                         
                         tmp <- readRDS(f)
                         pars <- tmp$params
                         mod <- tmp$gammod
                         counts <- tmp$datGAM
-                        
-                        params <- modparams
-                        params$gam_scale <- toupper(x = pars$model)
-                        params$ngen <- traits$BroodsGAMmax[which(traits$CommonName == spp)]
-                        params$seed <- sim
-                        params$index <- sim
-                        params$species <- spp
                         
                         # issue with near infinite gam predictions, 
                         # try removing siteyears with very few counts
@@ -430,92 +423,89 @@ outfiles <- foreach(sim = 1:length(fs),
                           filter(YearTotal > 1, SurvSeen > 1) %>% 
                           droplevels()
                         
-                        
                         preds <- gdd %>% 
                           mutate(SiteYear = paste(SiteID, Year, sep = "_")) %>% 
                           filter(SiteYear %in% unique(counts$SiteYear)) %>%
                           group_by(SiteID, Year) %>% 
-                          filter(DOY %in% (seq(90, 305, 4) + sample.int(n=3, size=54, replace=TRUE))) %>% 
+                          filter(DOY %in% (seq(90, 294, 4) + sample.int(n=3, size=52, replace=TRUE))) %>% 
                           ungroup() %>% 
                           mutate(zlistlength = 0,
                                  ztemperature = 0,
                                  zduration = 0,
-                                 RegYear = paste(region, Year, sep = "_" )) 
+                                 RegYear = paste(region, Year, sep = "_" ),
+                                 Week = 1 + ((yday(SiteDate) - yday(ymd(paste0(year(SiteDate), "-04-01")))) %/% 7)) %>% 
+                          filter(Week > 0)
                         
-                        # # prediction with simulated counts, stochastic but integers (if n is odd)
-                        # Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
-                        # beta <- coef(mod)
-                        # Vb   <- vcov(mod) ## posterior mean and cov of coefs
-                        # n <- 55  #527 # choose number of simulations
-                        # mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
-                        # ilink <- family(mod)$linkinv
-                        # linklppreds <- Xp %*% t(mrand)
-                        # nbpreds <- apply(X = linklppreds,
-                        #                  MARGIN = 1,
-                        #                  FUN = function(x){
-                        #                    temp <- sort(x)
-                        #                    bounds <- quantile(1:n, probs = c(0, 0.95))
-                        #                    x <- temp[bounds[1]:bounds[2]]
-                        #                    x <- ilink(x)
-                        #                    x <- rnbinom(n = length(x),
-                        #                                 mu = x,
-                        #                                 size = mod$family$getTheta(TRUE))
-                        #                    # x <- quantile(x, .5)
-                        #                    return(x)
-                        #                  })
+                        # Simulation from GAM parameter posterior probs
+                        # filter results with high predictions off the chart
+                        # 100 used for estimating phenology/abundance
+                        Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
+                        beta <- coef(mod)
+                        Vb   <- vcov(mod) ## posterior mean and cov of coefs
+                        n <- 250  #527 # choose number of simulations
+                        mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
+                        ilink <- family(mod)$linkinv
+                        linklppreds <- Xp %*% t(mrand)
+                        nbpreds <- apply(X = linklppreds,
+                                         MARGIN = 1,
+                                         FUN = function(x){
+                                           x <- ilink(x)
+                                           x <- rnbinom(n = length(x),
+                                                        mu = x,
+                                                        size = mod$family$getTheta(TRUE))
+                                           # x <- quantile(x, .5)
+                                           x[x > 10*max(counts$Total)] <- NA
+                                           return(x)
+                                         })
+                        
+                        # check out if super high values, remove those predictions
+                        test <- apply(X = nbpreds,
+                                      MARGIN = 1,
+                                      FUN = function(x) max(x))
+                        nbpreds <- nbpreds[which(is.finite(test)), ]
+                        nbpreds <- nbpreds[sample(x = 1:nrow(nbpreds), size = 100, replace = TRUE), ]
+                        
                         
                         outgen <- list()
                         outN <- list()
-                        for(predsim in 1:500){
+                        # for(predsim in 1:nrow(nbpreds)){
+                          for(predsim in 1:5){
+                            
+                          # # old way if only want median prediction
+                          # adjY <- predict(mod, newdata = preds, type = "link", se.fit = TRUE)
+                          # ilink <- family(mod)$linkinv
+                          # preds$adjY <-  map2_dbl(.x = adjY$fit, .y = adjY$se.fit, .f = function(x, y) {
+                          #   pred <- ilink(rnorm(n = 1, mean = x, sd = y))
+                          #   nbpred <- qnbinom(.5, size = mod$family$getTheta(TRUE), mu = pred)
+                          #   return(nbpred)
+                          # })
                           
-                          adjY <- predict(mod, newdata = preds, type = "link", se.fit = TRUE)
-                          ilink <- family(mod)$linkinv
-                          preds$adjY <-  map2_dbl(.x = adjY$fit, .y = adjY$se.fit, .f = function(x, y) {
-                            pred <- ilink(rnorm(n = 1, mean = x, sd = y))
-                            nbpred <- qnbinom(.5, size = mod$family$getTheta(TRUE), mu = pred)
-                            return(nbpred)
-                          })
+                          preds$adjY <- nbpreds[predsim, ]
                           
                           # predictions still giving ridiculous numbers at start/end of season
                           countstart <- min(counts$DOY[which(counts$Total > 0)]) - 14
                           countend <- max(counts$DOY[which(counts$Total > 0)]) + 14
                           
                           preds$adjY[which(preds$DOY < countstart | preds$DOY > countend)] <- 0
-
-                          # # prediction with simulated counts, stochastic but integers (if n is odd)
-                          # Xp <- predict.gam(object = mod, newdata = preds, type="lpmatrix") ## map coefs to fitted curves
-                          # beta <- coef(mod)
-                          # Vb   <- vcov(mod) ## posterior mean and cov of coefs
-                          # n <- 5  #527 # choose number of simulations
-                          # mrand <- MASS::mvrnorm(n, beta, Vb) ## simulate n rep coef vectors from posterior
-                          # ilink <- family(mod)$linkinv
-                          # linklppreds <- Xp %*% t(mrand)
-                          # nbpreds <- apply(X = linklppreds,
-                          #                  MARGIN = 1,
-                          #                  FUN = function(x){
-                          #                    # temp <- sort(x)
-                          #                    # bounds <- quantile(1:n, probs = c(0, 0.95))
-                          #                    # x <- temp[bounds[1]:bounds[2]]
-                          #                    x <- ilink(x)
-                          #                    x <- rnbinom(n = length(x),
-                          #                                 mu = x,
-                          #                                 size = mod$family$getTheta(TRUE))
-                          #                    x <- quantile(x, .5)
-                          #                    return(x)
-                          #                  })
-                          
-                          
-                          # preds$adjY <- nbpreds
-                        # preds$adjY <- predict.gam(object = mod, newdata = preds, type="response")
-                        # tmp[["preds"]] <- preds
                         
-                        
-                        # outgen <- list()
-                        # outN <- list()
-                        # for (p in 1:nrow(params)){
-                          # param <- params[p, ]
-                          param <- params
-                          adjcounts <- preds
+                      
+                          
+                        tmpgen <- list()
+                        tmpN <- list()
+                        for (p in 1:nrow(modparams)){
+                          # for (p in 1:3){
+                            
+                          # NEED LOOP FOR MODPARAMS
+                          param <- modparams[p, ]
+                          param$gam_scale <- toupper(x = pars$model)
+                          param$ngen <- traits$BroodsGAMmax[which(traits$CommonName == spp)]
+                          param$seed <- sim
+                          param$index <- sim
+                          param$species <- spp
+                          param$detprob <- detprob
+                          
+                          adjcounts <- Adjust_Counts_AfterGAM(param, counts, preds)
+                          
                           if (param$mod_region == "ALL"){
                             adjcounts$region <- "ALL"
                           }
@@ -529,6 +519,7 @@ outfiles <- foreach(sim = 1:length(fs),
                           } else if (param$gam_scale == "DOY"){
                             adjcounts$Timescale <- adjcounts$DOY
                           }
+                        
                           
                           results <- adjcounts %>%
                             group_by(region, modyear) %>% 
@@ -562,19 +553,21 @@ outfiles <- foreach(sim = 1:length(fs),
                           siteresults$gen <- NULL
                           
                           phen_est <- siteresults %>% 
+                            select(region, SiteID, Year, Gen, Timescale, count, maxgen) %>% 
                             filter(complete.cases(.)) %>% 
                             left_join(ngen[, c("region", "bicpick")]) %>% 
                             filter(maxgen == bicpick) %>% 
                             ungroup() %>% 
-                            group_by(region, SiteID, Year, Gen, AccumDD) %>% 
+                            group_by(region, SiteID, Year, Gen, Timescale) %>% 
                             summarise(Total = sum(count)) %>% 
                             group_by(region, SiteID, Year, Gen) %>% 
-                            do(Summ_curve(t = .$AccumDD, y = .$Total)) %>% 
+                            do(Summ_curve(t = .$Timescale, y = .$Total)) %>% 
                             group_by(SiteID, Year) %>%
                             mutate(gen_weight = estN / sum(estN))
                           
                           # do population index in terms of DOY like UKBMS
                           N_est <- siteresults %>% 
+                            select(region, SiteID, Year, Gen, DOY, count, maxgen) %>% 
                             filter(complete.cases(.)) %>% 
                             left_join(ngen[, c("region", "bicpick")]) %>% 
                             filter(maxgen == bicpick) %>% 
@@ -590,7 +583,7 @@ outfiles <- foreach(sim = 1:length(fs),
                             mutate(Site_RE = mean(curve_mean) - meanmu) %>% 
                             group_by(Year, Gen) %>% 
                             mutate(Year_RE = mean(curve_mean) - meanmu) %>% 
-                            dplyr::select(-estN, -meanmu) %>%
+                            # dplyr::select(-estN, -meanmu) %>%
                             ungroup() %>% 
                             mutate(Year = as.numeric(as.character(Year)))
                           
@@ -598,19 +591,37 @@ outfiles <- foreach(sim = 1:length(fs),
                             bind_cols(param[rep(seq_len(nrow(param)), each= nrow(N_est)),]) %>% 
                             mutate(predsim = predsim)
                           
-                          outgen[[predsim]] <- ngen
-                          outN[[predsim]] <- N_est
+                          tmpgen[[p]] <- ngen
+                          tmpN[[p]] <- N_est
 
+                        } # close p
+                        tmpgendf <- bind_rows(tmpgen)
+                        tmpNdf <- bind_rows(tmpN)
+                        
+                        outgen[[predsim]] <- tmpgendf
+                        outN[[predsim]] <- tmpNdf
                         } # close predsim
-                          
+                        
+                        Q05 <- function(x){
+                          y <- quantile(x, probs = .05, na.rm = TRUE)
+                        }
+                        
+                        Q50 <- function(x){
+                          y <- quantile(x, probs = .5, na.rm = TRUE)
+                        }
+                        
+                        Q95 <- function(x){
+                          y <- quantile(x, probs = .95, na.rm = TRUE)
+                        }
+                        
                         gen <- bind_rows(outgen)
                         N <- bind_rows(outN) %>% 
                           tidyr::gather(key = "metric", value = "value", PopIndex, curve_mean:Year_RE) %>% 
-                          group_by(SiteID, Year, Gen, region, gam_scale, species, metric) %>% 
-                          summarise_at("value", median, na.rm = TRUE)
+                          group_by(SiteID, Year, Gen, region, gam_scale, species, mixmod, gam_smooth, metric) %>% 
+                          summarise_at("value", funs(q05 = Q05, q5 = Q50, q95 = Q95))
                         
                         
-                        
+                        tmp[["params"]] <- left_join(tmp$params, param)
                         tmp[["gen"]] <- gen
                         tmp[["N"]] <- N
                         saveRDS(tmp, file = f)

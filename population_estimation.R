@@ -35,8 +35,8 @@ if(.Platform$OS.type == "unix"){
 sites <- read.csv("data/OHsites_reconciled_update2016.csv")
 sites$SiteID <- formatC(as.numeric(sites$Name), width = 3, format = "d", flag = "0")
 sites$Name <- NULL
-# gdd <- readRDS("data/dailyDD.rds")
-gdd <- readRDS("../ohiogdd/dailyDD.rds")
+gdd <- readRDS("data/dailyDD.rds")
+# gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 gdd <- left_join(gdd, sites) %>% 
   dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
@@ -550,6 +550,26 @@ outfiles <- foreach(sim = 1:length(fs),
 #          geom_point(data = adjcounts, aes(x = AccumDD, y = adjY, group = SiteID), alpha = .5) +
 #          facet_wrap(~Year)
 # 
+
+# unsure why this was deleted, found in github
+system.time({
+  genscore <- vector("list", length(fs))
+  siteyrscore <- vector("list", length(fs))
+  relpopscore <- vector("list", length(fs))
+  for (i in 1:length(fs)){
+      f <- fs[i]
+      tmp <- readRDS(f)
+      genscore[[i]] <- tmp[[7]]
+      siteyrscore[[i]] <- tmp[[8]]
+      relpopscore[[i]] <- tmp[[9]]
+    }
+  gendf <- bind_rows(genscore)
+  phendf <- bind_rows(siteyrscore)
+  popdf <- bind_rows(relpopscore)
+  })
+saveRDS(gendf, "gendf.rds")
+saveRDS(phendf, "phendf.rds")
+saveRDS(popdf, "popdf.rds")
 
 
 
