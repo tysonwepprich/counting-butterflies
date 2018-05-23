@@ -285,8 +285,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "gdd"){
                               mod <- safe_gam(Total ~ 
-                                                s(zlistlength) +
-                                                s(ztemperature) +
+                                                # s(zlistlength) +
+                                                # s(ztemperature) +
                                                 te(lat, lon, AccumDD, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
                                                 s(SiteID, bs = "re") +
                                                 s(RegYear, AccumDD, bs = "fs", k = 5, m = 1),
@@ -302,8 +302,8 @@ outfiles <- foreach(sim = 1:nrow(params),
                             
                             if(model == "doy"){
                               mod <- safe_gam(Total ~ 
-                                                s(zlistlength) +
-                                                s(ztemperature) +
+                                                # s(zlistlength) +
+                                                # s(ztemperature) +
                                                 te(lat, lon, DOY, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
                                                 s(SiteID, bs = "re") +
                                                 s(RegYear, DOY, bs = "fs", k = 5, m = 1),
@@ -349,7 +349,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                           outlist[["params"]] <- pars
                           outlist[["gammod"]] <- mod$result
                           outlist[["datGAM"]] <- temp
-                          saveRDS(outlist, paste(species, model, years, "DP", "rds", sep = "."))
+                          saveRDS(outlist, paste(species, model, years, "noDP", "rds", sep = "."))
                           
                         }else{
                           outlist <- list()
