@@ -51,7 +51,7 @@ Abund_Curve <- function(t = t, alpha = .3, beta = 1, mu = 10, sig = 1){
 
 # Summary function for a generation's count distribution
 # To compare mixture model results when skewed
-Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
+Summ_curve <- function(t, y, quants = c(.1, .25, .5, .75, .9)){
   n <- length(y)
   cdf <- cumsum(y) / sum(y)
   cmean <- weighted.mean(t, y)
@@ -72,11 +72,22 @@ Summ_curve <- function(t, y, quants = c(.1, .5, .9)){
 
 # data argument is row of parameters
 # output list of counts, truth
-Simulate_Counts <- function(data, gdd){
-  set.seed(data$seed) # use for all rows?
+Simulate_Counts <- function(param, gdd){
+  set.seed(param$seed) # use for all rows?
   # randomly select sites and years to use their coordinates and historical gdd accumulation
-  sites <- sample(x = unique(gdd$SiteID), size = data$nsite, replace = FALSE)
-  years <- sample(x = unique(gdd$Year), size = data$nyear, replace = FALSE)
+  # sites <- sample(x = unique(gdd$SiteID), size = param$nsite, replace = FALSE)
+  
+  years <- sample(x = unique(gdd$Year), size = param$nyear, replace = FALSE)
+  
+  # sample sites so each of 4 regions equally represented
+  sites <- gdd %>% 
+    ungroup() %>% 
+    dplyr::select(SiteID, region) %>% 
+    distinct() %>% 
+    group_by(region) %>% 
+    sample_n(param$nsite / 4) %>% 
+    pull(SiteID)
+  
   dddat <- gdd %>% 
     filter(SiteID %in% sites, Year %in% years) # %>% 
     # filter(DOY %in% (seq(90, 293, 7) + sample.int(n=6, size=30, replace=TRUE)))
@@ -93,22 +104,22 @@ Simulate_Counts <- function(data, gdd){
   
   
   # voltinism varying by site
-  ngen <- data$ngen
+  ngen <- param$ngen
   if(ngen == 1){
-    gen_ddreq <- 1000
+    gen_ddreq <- param$emerg_dd
     gen_relsize = 1
     gen_relsprd = 1
   }else{
-    gen_ddreq <- seq(500, 2000, length.out = ngen)
-    gen_relsize <- switch(as.character(data$gen_size), 
+    gen_ddreq <- c(param$emerg_dd, param$emerg_dd + param$gen_dd * 1:(ngen - 1))
+    gen_relsize <- switch(as.character(param$gen_size), 
                           "equal" = rep(1, ngen),
                           "inc" = seq(1, ngen, length.out = ngen),
                           "dec" = seq(ngen, 1, length.out = ngen))
     gen_relsprd <- seq(1, 1.5, length.out = ngen)
   }
   # simulate phenology for each generation and combine
-  year_var <- rnorm(data$nyear, mean = 0, sd = data$year_mu_sd)
-  site_var <- rnorm(data$nsite, mean = 0, sd = data$site_mu_sd)
+  year_var <- rnorm(param$nyear, mean = 0, sd = param$year_mu_sd)
+  site_var <- rnorm(param$nsite, mean = 0, sd = param$site_mu_sd)
   year_Mvar <- seq(from = .5, to = 2, length.out = length(years))
   site_Mvar <- seq(from = 100, to = 1000, length.out =  length(sites))
   
@@ -123,7 +134,7 @@ Simulate_Counts <- function(data, gdd){
       year_re <- year_var[y]
       site_M <- site_Mvar[z]
       year_M <- year_Mvar[y]
-      if(data$ngen == 1){
+      if(param$ngen == 1){
         year_volt <- 1
       }else{
         year_volt <- gddannvar %>% 
@@ -132,11 +143,11 @@ Simulate_Counts <- function(data, gdd){
           as.numeric()
       }
       
-      for (g in 1:data$ngen){
+      for (g in 1:param$ngen){
         simdat <- dddat %>% filter(SiteID == site, Year == yr)
         simt <-  simdat$AccumDD
-        simalpha <- data$death_rate
-        simbeta <- gen_relsprd[g] * data$peak_sd
+        simalpha <- param$death_rate
+        simbeta <- gen_relsprd[g] * param$peak_sd
         simmu <- (gen_ddreq[g] + site_re + year_re)
         df <- Abund_Curve(t = simt, alpha = simalpha, 
                           beta = simbeta, mu = simmu, sig = 1)
@@ -146,7 +157,7 @@ Simulate_Counts <- function(data, gdd){
         df$Year_RE <- year_re
         df$Site_M <- site_M
         df$Year_M <- year_M
-        df$gen_weight <- gen_relsize[g] * ifelse(g == data$ngen, year_volt * ((42 - df$lat) / 3.35), 1)
+        df$gen_weight <- gen_relsize[g] * ifelse(g == param$ngen, year_volt * ((42 - df$lat) / 3.35), 1)
         dflist[[length(dflist)+1]] <- df
       }
     }
@@ -160,11 +171,11 @@ Simulate_Counts <- function(data, gdd){
   counts <- dfall %>% 
     group_by(SiteID, SiteDate, lat, lon, Year, DOY, AccumDD, region, maxT, minT, Site_RE, Year_RE, Site_M, Year_M) %>% 
     summarise(RelProp = sum(y * gen_weight),
-              DP = plogis(data$detprob_b0 + data$detprob_b1 * maxT[1] + data$detprob_b2 * maxT[1]^2)) %>% 
+              DP = plogis(param$detprob_b0 + param$detprob_b1 * maxT[1] + param$detprob_b2 * maxT[1]^2)) %>% 
     group_by(SiteID, Year) %>% 
     mutate(RelProp = RelProp / sum(RelProp),
-           # M = rnbinom(1, mu = data$negbin_mu, size = data$negbin_disp),
-           M = rpois(1, lambda = Site_M * Year_M), # should also multiply by ngen to standardize M in each gen, but overlooked
+           # M = rnbinom(1, mu = param$negbin_mu, size = param$negbin_disp),
+           M = rpois(1, lambda = Site_M * Year_M * ngen), # should also multiply by ngen to standardize M in each gen, but overlooked
            N = rpois(length(RelProp), lambda = RelProp * M),
            Y = rbinom(length(N), size = N, prob = DP)) %>% 
     data.frame()
@@ -199,18 +210,18 @@ Simulate_Counts <- function(data, gdd){
 
 
 # accounts for det prob, GAM smoothing
-Adjust_Counts <- function(data, counts){
-  set.seed(data$seed)
+Adjust_Counts <- function(param, counts){
+  set.seed(param$seed)
   # for GAM, need factors
   counts$SiteYearID <- as.factor(paste(counts$SiteID, counts$Year, sep = "_"))
   counts$SiteID <- as.factor(counts$SiteID)
   counts$region <- as.factor(counts$region)
   counts$Year <- as.factor(as.character(counts$Year))
   counts$RegYear <- as.factor(paste(counts$region, counts$Year, sep = "_"))
-  if(data$gam_scale == "DOY"){
+  if(param$gam_scale == "DOY"){
     counts$Timescale <- counts$DOY
   }
-  if(data$gam_scale == "GDD"){
+  if(param$gam_scale == "GDD"){
     counts$Timescale <- counts$AccumDD
   }
   
@@ -227,16 +238,16 @@ Adjust_Counts <- function(data, counts){
     ungroup()
 
   adjcounts <- counts_8day %>% 
-    sample_frac(size = 1 - data$surv_missing) %>% 
+    sample_frac(size = 1 - param$surv_missing) %>% 
     droplevels()
   
-  if(data$detprob_model == "known"){
+  if(param$detprob_model == "known"){
     adjcounts <- mutate(adjcounts, adjY = Y / DP)
   }else{
     adjcounts <- mutate(adjcounts, adjY = Y)
   }
   
-  if(data$gam_smooth == "none"){
+  if(param$gam_smooth == "none"){
     adjcounts$gam_flag <- 0
     return(adjcounts)  
   }else{
@@ -244,10 +255,10 @@ Adjust_Counts <- function(data, counts){
     
     safe_gam <- purrr::safely(gam)
     
-    if(data$detprob_model %in% c("none", "known")){
+    if(param$detprob_model %in% c("none", "known")){
       gammod <- safe_gam(adjY ~ 
                            te(lat, lon, Timescale, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                            s(SiteYearID, bs = "re") + 
+                           s(SiteID, bs = "re") + 
                            s(RegYear, Timescale, bs = "fs", k = 5, m = 1),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
@@ -256,11 +267,11 @@ Adjust_Counts <- function(data, counts){
                          optimizer = c("outer", "newton"), 
                          control = list(maxit = 500))
     }
-    if(data$detprob_model == "covariate"){
+    if(param$detprob_model == "covariate"){
       gammod <- safe_gam(adjY ~ 
                            s(maxT) +
                            te(lat, lon, Timescale, bs = c("tp", "cr"), k = c(5, 30), d = c(2, 1)) +
-                           s(SiteYearID, bs = "re") +
+                           s(SiteID, bs = "re") +
                            s(RegYear, Timescale, bs = "fs", k = 5, m = 1),
                          family = nb(theta = NULL, link = "log"),
                          # family = poisson(link = "log"),
@@ -272,7 +283,7 @@ Adjust_Counts <- function(data, counts){
   }
   
   if(is.null(gammod$error)){
-    if(data$gam_smooth == "preds_4day"){
+    if(param$gam_smooth == "preds_4day"){
       newdata <- counts_4day
     }else{
       newdata <- counts_8day
@@ -280,7 +291,7 @@ Adjust_Counts <- function(data, counts){
     
     # HOW TO DEAL WITH TEMP COVARIATE HERE?
     # If excluded, predicted counts are really low. Could scale and use mean like before
-    # if(data$detprob_model == "covariate"){
+    # if(param$detprob_model == "covariate"){
     #   newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response", exclude = "s(maxT)")
     # }else{
     #   newdata$adjY <- predict(gammod$result, newdata = newdata, type = "response")
@@ -315,7 +326,7 @@ Adjust_Counts <- function(data, counts){
     #                  })
     # newdata$adjY <- nbpreds
     
-    if(data$gam_smooth == "interpolate"){
+    if(param$gam_smooth == "interpolate"){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
       adjcounts <- bind_rows(adjcounts, interps)
       adjcounts$gam_flag <- 0
@@ -325,18 +336,77 @@ Adjust_Counts <- function(data, counts){
       return(adjcounts)
     }
     
-    if(data$gam_smooth %in% c("preds_4day", "preds_8day")){
+    if(param$gam_smooth %in% c("preds_4day", "preds_8day")){
       adjcounts <- newdata
       adjcounts$gam_flag <- 0
       adjcounts$gam_devexpl <- summod$dev.expl
       adjcounts$nb_theta <- gammod$result$family$getTheta(TRUE)
+      adjcounts$
       return(adjcounts)
-    }
+    
+      #TODO: return summod to track GAMs across all simulations
+      
+      
+      }
   }else{
     # error in gam fit
     adjcounts$gam_flag <- 1
     adjcounts$nb_disp <- NA
     return(adjcounts)  
+  }
+}
+
+
+Adjust_Counts_AfterGAM <- function(param, counts, preds){
+  counts <- counts %>% 
+    filter(SiteYear %in% preds$SiteYear) %>% 
+    mutate(Year = as.numeric(as.character(Year)),
+           adjY = Total)
+  
+  # counts were simulated each day, reduce to every 4 days
+  counts_4day <- preds %>% 
+    ungroup()
+  
+  counts_8day <- counts_4day %>% 
+    group_by(SiteYear, Week) %>% 
+    sample_n(size = 1) %>% 
+    ungroup()
+  
+  if(param$gam_smooth == "none"){
+    adjcounts <- counts
+    return(adjcounts)  
+  }else{
+    
+    if(param$gam_smooth == "interpolate"){
+      countweeks <- counts %>% 
+        select(SiteYear, Week) %>% 
+        distinct()
+      predweeks <- counts_8day %>% 
+        select(SiteYear, Week) %>% 
+        distinct()
+      
+      interps <- anti_join(predweeks, countweeks, by = c("SiteYear", "Week")) %>% 
+        filter(Week <= 30) %>% 
+        mutate(SYW = paste(SiteYear, Week, sep = "_"))
+      
+      interps2 <- counts_8day %>% 
+        mutate(SYW = paste(SiteYear, as.character(Week), sep = "_")) %>% 
+        filter(SYW %in% interps$SYW)
+      
+      adjcounts <- bind_rows(counts, interps2)
+      
+      return(adjcounts)
+    }
+    
+    if(param$gam_smooth == "preds_4day"){
+      adjcounts <- counts_4day
+      return(adjcounts)
+    }
+    
+    if(param$gam_smooth == "preds_8day"){
+      adjcounts <- counts_8day
+      return(adjcounts)
+    }
   }
 }
 
