@@ -19,7 +19,6 @@ library(stringr)
 
 # for parallel simulations with control over seed for reproducibility
 # need different packages for windows computers
-library(doRNG)
 library(foreach) # for parallelized loops
 if(.Platform$OS.type == "unix"){
   library(doMC)    # parallel backend for foreach, only for linux/mac
@@ -51,8 +50,8 @@ covdata <- data %>%
 
 sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
   mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
-gdd <- readRDS("data/dailyDD.rds")
-# gdd <- readRDS("../ohiogdd/dailyDD.rds")
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
 
 
 gdd <- left_join(gdd, sites) %>% 
@@ -85,6 +84,27 @@ gdd <- gdd %>%
 #   mutate(fallfrost = ifelse(DOY > 200, frost5day, NA),
 #          springfrost = ifelse(DOY < 200, frost5day, NA),
 #          photo = geosphere::daylength(lat, DOY))
+
+# # what is range of gdd experienced within a week?
+# # can be over 100 within same site and year!
+# test <- gdd %>% 
+#   mutate(week = week(SiteDate)) %>% 
+#   group_by(week) %>% 
+#   mutate(maxgddall = max(AccumDD),
+#          mingddall = min(AccumDD),
+#          rangeall = maxgddall - mingddall) %>% 
+#   group_by(Year, week) %>% 
+#   mutate(maxgddyear = max(AccumDD),
+#          mingddyear = min(AccumDD),
+#          rangeyear = maxgddyear - mingddyear) %>% 
+#   group_by(Year, week, SiteID) %>% 
+#   mutate(maxgddsite = max(AccumDD),
+#          mingddsite = min(AccumDD),
+#          rangesite = maxgddsite - mingddsite) %>% 
+#   dplyr::select(Year, week, SiteID, rangeall, rangeyear, rangesite) %>% 
+#   distinct()
+
+
 
 # test <- gdd %>% filter(Year > 2010) 
 # plt <- ggplot(test, aes(x = SiteDate, y = springfrost)) +
