@@ -90,7 +90,7 @@ gdd <- gdd %>%
 virtsp <- data.frame(species = letters[1:20],
                      ngen = rep(c(1, 1, 1, 1, 2, 2, 3, 3, 4, 5), 2),
                      emerg_dd = rep(c(400, 1000, 1600, 2200, 400, 800, 200, 600, 400, 200), 2),
-                     gen_dd = rep(c(NA, NA, NA, NA, 1000, 1000, 800, 800, 600, 500), 2),
+                     gen_dd = rep(c(NA, NA, NA, NA, 1000, 800, 800, 600, 600, 500), 2),
                      death_rate = c(rep(.005, 10), rep(.0075, 10)))
 
 surv_effort <- data.frame(surv_id = c("long", "balanced", "broad"),
@@ -159,7 +159,8 @@ params$seed <- 1:nrow(params)
 params$index <- formatC(params$seed, width=5, flag="0")
 
 
-# params <- params[c(1, 2001, 2501, 3001, 3501, 4001), ]
+# params <- params %>% 
+  # sample_n(40)
 # 
 # fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
 # details <- file.info(fs)
@@ -171,54 +172,49 @@ params$index <- formatC(params$seed, width=5, flag="0")
 # params <- params[-which(params$seed %in% done), ]
 
 
-# analysis workflow
-
-
-# test <- params[5, ]
-# # test$site_mu_sd <- 50
-# # test$year_mu_sd <- 50
-# # test$gam_smooth <- "preds_8day"
-# # test$detprob_model <- "covariate"
+# # analysis workflow
 # 
-# counts <- Simulate_Counts(data = test, gdd = gdd)
+# # test before committing to loop
+# test <- params[1, ] %>% 
+#   left_join(surv_effort) %>% 
+#   left_join(virtsp)
+# test
+# # # test$site_mu_sd <- 50
+# # # test$year_mu_sd <- 50
+# # # test$gam_smooth <- "preds_8day"
+# # # test$detprob_model <- "covariate"
+# # 
+# counts <- Simulate_Counts(param = test, gdd = gdd)
 # 
 # # checking counts
-# pops <- counts %>%
-#   group_by(SiteID, Year, M) %>%
-#   summarise(bflydays = sum(Y))
-plt <- ggplot(counts, aes(x = AccumDD, y = Y, group = as.factor(Year), color = as.factor(Year))) +
-  geom_path() +
-  facet_wrap(~SiteID, ncol = 4, scales = "free_y")
-plt
+# plt <- ggplot(counts[[1]], aes(x = AccumDD, y = Y, group = as.factor(Year), color = as.factor(Year))) +
+#   geom_path() +
+#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
+# plt
 # 
 # # GAM interpolation/prediction
-# adjcounts <- Adjust_Counts(data = test, counts)
-plt <- ggplot(adjcounts, aes(x = DOY, y = adjY, group = Year, color = Year)) +
-  geom_point() +
-  facet_wrap(~SiteID, ncol = 4, scales = "free_y")
-plt
-# 
-# system.time({
-#   results <- adjcounts %>%
-#     # mutate(mvmin = 1, mvmax = 3) %>%
-#     group_by(SiteID, Year) %>%
-#     mutate(weeks_obs = length(which(adjY > 0)),
-#            total_obs = sum(round(adjY))) %>%
-#     filter(weeks_obs >= 2, total_obs >= 5) %>%
-#     do(mixmods = CompareMixMods(dat = ., mvmax = 3))
-# })
+# adjcounts <- Adjust_Counts(param = test, counts = counts[[1]])
+# plt <- ggplot(adjcounts[[1]], aes(x = AccumDD, y = adjY, group = Year, color = Year)) +
+#   geom_point() +
+#   facet_wrap(~SiteID, ncol = 4, scales = "free_y")
+# plt
+# # 
+# # system.time({
+# #   results <- adjcounts %>%
+# #     # mutate(mvmin = 1, mvmax = 3) %>%
+# #     group_by(SiteID, Year) %>%
+# #     mutate(weeks_obs = length(which(adjY > 0)),
+# #            total_obs = sum(round(adjY))) %>%
+# #     filter(weeks_obs >= 2, total_obs >= 5) %>%
+# #     do(mixmods = CompareMixMods(dat = ., mvmax = 3))
+# # })
 
 
-# # test run with a few rows
-# params <- params %>% 
-#   filter(nsite == 4, nyear == 4, ngen == 2, gen_size == "equal",
-#          peak_sd == 10, death_rate == 0.6, site_mu_sd == 25, 
-#          year_mu_sd == 50, surv_missing != 0.2)
 #####
 # Simulation
 #####
 # ncores <- 6
-ncores <- 40
+ncores <- 3
 
 if(.Platform$OS.type == "unix"){
   registerDoMC(cores = ncores)
@@ -237,7 +233,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                                  "lubridate", "mclust", "mixsmsn"),
                     .export = c("params", "gdd", "Abund_Curve", "virtsp", "surv_effort",
                                 "Adjust_Counts", "CompareMixMods",
-                                "Simulate_Counts", "Summ_curve",
+                                "Simulate_Counts", "Summ_curve","StochRound",
                                 "Summ_mixmod", "mainDir", "RightNumGen", "AssignGeneration"),
                     .inorder = FALSE,
                     .options.multicore = mcoptions) %dopar% {
@@ -249,7 +245,7 @@ outfiles <- foreach(sim = 1:nrow(params),
                       # make directories to store results
                       subDir <- paste("results", 
                                       formatC(floor(param$seed / 1000), width = 2, flag = "0"), sep = "_")
-
+                      
                       setwd(mainDir)
                       if (file.exists(subDir)){
                         setwd(file.path(mainDir, subDir))
@@ -258,14 +254,13 @@ outfiles <- foreach(sim = 1:nrow(params),
                         setwd(file.path(mainDir, subDir))
                       }
                       
-                      
-                      
-                      simpop <- Simulate_Counts(data = param, gdd = gdd)
+                      simpop <- Simulate_Counts(param = param, gdd = gdd)
                       counts <- simpop[[1]]
                       truth <- simpop[[2]]
                       # GAM interpolation/prediction
-                      adjcounts <- Adjust_Counts(data = param, counts)
-                      
+                      adjcountslist <- Adjust_Counts(param = param, counts)
+                      adjcounts <- adjcountslist[[1]]
+                      sumgam <- adjcountslist[[2]]
                       # Do regional mixture models, pooling years/sites
                       # Also try statewide
                       if (param$mod_region == "ALL"){
@@ -279,9 +274,9 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                         results <- adjcounts %>%
                           group_by(region, modyear) %>% 
-                          # mutate(weeks_obs = length(which(round(adjY) > 0)),
-                          # total_obs = sum(round(adjY))) %>% 
-                          # filter(weeks_obs >= 2, total_obs >= 5) %>% 
+                          # summarise(weeks_obs = length(which(round(adjY) > 0)),
+                          # total_obs = sum(round(adjY))) %>%
+                          # filter(weeks_obs >= 2, total_obs >= 5) %>%
                           do(mixmods = CompareMixMods(dat = ., param = param))
                         
                         # This df could be used to see if BIC/AIC choose right number of gen
@@ -301,31 +296,32 @@ outfiles <- foreach(sim = 1:nrow(params),
                       
                       # # what is siteresults?
                       # # plot shows generations estimated for different maxgen
-                      # plt <- ggplot(siteresults, aes(x = Timescale, group = gen, color = gen)) +
+                      # plt <- ggplot(siteresults, aes(x = AccumDD, group = gen, color = gen)) +
                       #   geom_density() +
                       #   facet_wrap(~maxgen)
                       # plt
-                      
+                      # 
                       # # Extract summary stats for each generation's distribution
                       # summ_mods <- results %>% 
                       #   ungroup() %>% 
                       #   group_by(region) %>% 
                       #   do(Summ_mixmod(.))
                       
-                      outlist <- list(param, counts, adjcounts, truth, genright, siteresults)   
-                      saveRDS(object = outlist, file = paste("popest", param$index, sep = "_"))
+                      tmp <- list(param, counts, adjcounts, sumgam, truth, genright, siteresults)   
+                      # saveRDS(object = outlist, file = paste("popest", param$index, sep = "_"))
                       
-                      rm(counts, adjcounts, summ_mods, results, outlist, simpop, truth, genright, siteresults)
-                      gc()
+                      rm(results)
+                      # rm(counts, adjcounts, results, outlist, sumgam, simpop, truth, genright, siteresults)
+                      # gc()
                       
-                      # hope this is the only thing returned
-                      return(param$seed)
-                    } # close dopar
-
-
-if(.Platform$OS.type == "windows"){
-  stopCluster(cl)
-}
+                      # # hope this is the only thing returned
+                      # return(param$seed)
+#                     } # close dopar
+# 
+# 
+# if(.Platform$OS.type == "windows"){
+#   stopCluster(cl)
+# }
 #####
 # Summarize results
 #####
@@ -352,48 +348,49 @@ if(.Platform$OS.type == "windows"){
 
 # NB: not all mixture model problems filtered out, like sigma2 close to zero to create a peak for one count
 
-fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
-fs_index <- stringr::str_split_fixed(string = fs, pattern = "_", n = 3)[, 3]
-
-md <- file.info(fs) %>% 
-  mutate(name = row.names(file.info(fs)))
-missed <- md %>% filter(mtime < as.Date("2018-02-13"))
-
-# errors, just ignored because only 3
-params[-which(params$index %in% fs_index), ]
-
-# outlist <- list()
-# outscore <- list()
-# outpop <- list()
-# for (f in fs){
-ncores <- 40
-
-if(.Platform$OS.type == "unix"){
-  registerDoMC(cores = ncores)
-}else if(.Platform$OS.type == "windows"){
-  cl <- makeCluster(ncores)
-  registerDoSNOW(cl)
-}
-
-mcoptions <- list(preschedule = FALSE)
-outfiles <- foreach(sim = 1:length(fs),
-                    .combine='c',
-                    .packages= c("mgcv", "dplyr", "tidyr", "purrr",
-                                 "lubridate", "mclust", "mixsmsn"),
-                    .export = c("Abund_Curve", "fs",
-                                "Adjust_Counts", "CompareMixMods",
-                                "Simulate_Counts", "Summ_curve",
-                                "Summ_mixmod", "RightNumGen", "AssignGeneration", "TrapezoidIndex"),
-                    .inorder = FALSE,
-                    .options.multicore = mcoptions) %dopar% {
-                      f <- fs[sim]
-                      tmp <- readRDS(f)
+# fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
+# fs_index <- stringr::str_split_fixed(string = fs, pattern = "_", n = 3)[, 3]
+# 
+# md <- file.info(fs) %>% 
+#   mutate(name = row.names(file.info(fs)))
+# missed <- md %>% filter(mtime < as.Date("2018-02-13"))
+# 
+# # errors, just ignored because only 3
+# test <- params[-which(params$index %in% fs_index), ]
+# 
+# # outlist <- list()
+# # outscore <- list()
+# # outpop <- list()
+# # for (f in fs){
+# ncores <- 40
+# 
+# if(.Platform$OS.type == "unix"){
+#   registerDoMC(cores = ncores)
+# }else if(.Platform$OS.type == "windows"){
+#   cl <- makeCluster(ncores)
+#   registerDoSNOW(cl)
+# }
+# 
+# mcoptions <- list(preschedule = FALSE)
+# outfiles <- foreach(sim = 1:length(fs),
+#                     .combine='c',
+#                     .packages= c("mgcv", "dplyr", "tidyr", "purrr",
+#                                  "lubridate", "mclust", "mixsmsn"),
+#                     .export = c("Abund_Curve", "fs",
+#                                 "Adjust_Counts", "CompareMixMods",
+#                                 "Simulate_Counts", "Summ_curve", "StochRound",
+#                                 "Summ_mixmod", "RightNumGen", "AssignGeneration", "TrapezoidIndex"),
+#                     .inorder = FALSE,
+#                     .options.multicore = mcoptions) %dopar% {
+                      # f <- fs[sim]
+                      # tmp <- readRDS(f)
                       param <- tmp[[1]]
                       counts <- tmp[[2]]
                       adjcounts <- tmp[[3]]
-                      truth <- tmp[[4]]
-                      genright <- tmp[[5]]
-                      siteresults <- tmp[[6]]
+                      sumgam <- tmp[[4]]
+                      truth <- tmp[[5]]
+                      genright <- tmp[[6]]
+                      siteresults <- tmp[[7]]
                       
                       # 1. when is number of generations correct compared to params?
                       # What others errors, like degenerate modes with redundant mu?
@@ -401,12 +398,14 @@ outfiles <- foreach(sim = 1:length(fs),
                       trueweight <- truth %>%
                         mutate(Year = as.character(Year)) %>%
                         left_join(distinct(adjcounts[, c("SiteID", "Year", "region", "modyear", "RegYear")])) %>%
-                        filter(Gen == max(Gen)) %>%
+                        filter(Gen == max(Gen),
+                               resultTimescale == "GDD") %>%
                         # group_by(region, modyear) %>%
                         group_by(region, modyear, RegYear) %>%
                         summarise(true_weight = mean(gen_weight))
                       
-                      
+                      # not as important now that I changed simulation so 
+                      # a zero weight for the last generation doesn't happen anymore
                       ngen <- genright %>%
                         right_join(trueweight) %>%
                         # group_by(region, modyear) %>%
@@ -422,228 +421,229 @@ outfiles <- foreach(sim = 1:length(fs),
                         slice(1L) %>%
                         dplyr::select(maxgen, mixmod_flag, badmixmod:bicpick)
 
-                      ngen_score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),], ngen)
+                      # ngen_score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),], ngen)
 
-                      tmp[[7]] <- ngen_score
-# 
-#                       # 2. what is error in generation weights estimated compared to simulated "truth"?
-#                       # 3. what is error in phenology for each site/year compared to "truth" (quantiles/max/mean)?
-#                       right_gen <- ngen %>%
-#                         mutate(rightgen = maxgen) %>%
-#                         ungroup() %>% 
-#                         dplyr::select(RegYear, rightgen)
-# 
-#                       # Do curve summaries in terms of GDD for comparison
-#                       siteresults$Gen <- siteresults$gen
-#                       siteresults$gen <- NULL
-#                       phen_est <- siteresults %>%
-#                         left_join(right_gen) %>%
-#                         # dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>%
-#                         filter(complete.cases(.)) %>%
-#                         filter(maxgen == rightgen) %>%
-#                         ungroup() %>%
-#                         group_by(SiteID, Year, Gen, AccumDD) %>%
-#                         summarise(Total = sum(count)) %>%
-#                         group_by(SiteID, Year, Gen) %>%
-#                         do(Summ_curve(t = .$AccumDD, y = .$Total)) %>%
-#                         group_by(SiteID, Year) %>%
-#                         mutate(gen_weight = estN / sum(estN))
-# 
-#                       truth <- truth %>%
-#                         ungroup() %>%
-#                         mutate(PopIndex = gen_weight * M,
-#                                Data = "truth") %>%
-#                         dplyr::select(-estN, -M)
-#                       # 3a. regression of random effects for site/year compared to estimated variation?
-#                       # maybe not necessary/interesting...
-# 
-# 
-#                       # 4. what is error in site/year population size compared to "truth" using trapezoid rule?
-#                       # do population index in terms of DOY like UKBMS
-#                       N_est <- siteresults %>%
-#                         # dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>%
-#                         filter(complete.cases(.)) %>%
-#                         filter(maxgen == param$ngen) %>%
-#                         ungroup() %>%
-#                         group_by(SiteID, Year, Gen, DOY) %>%
-#                         summarise(Total = sum(count)) %>%
-#                         group_by(SiteID, Year, Gen) %>%
-#                         summarise(PopIndex = TrapezoidIndex(DOY, Total)) %>%
-#                         right_join(phen_est) %>%
-#                         group_by(Gen) %>%
-#                         mutate(meanmu = mean(curve_mean)) %>%
-#                         group_by(SiteID, Gen) %>%
-#                         mutate(Site_RE = mean(curve_mean) - meanmu) %>%
-#                         group_by(Year, Gen) %>%
-#                         mutate(Year_RE = mean(curve_mean) - meanmu,
-#                                Data = "estimate") %>%
-#                         dplyr::select(-estN, -meanmu) %>%
-#                         ungroup() %>%
-#                         mutate(Year = as.numeric(as.character(Year)))
-# 
-#                       alldat <- bind_rows(truth, N_est)
-# 
-#                       allscore <- alldat %>%
-#                         dplyr::select(-Site_RE, -Year_RE, -Site_M, -Year_M) %>%
-#                         tidyr::gather(key = "metric", value = "value", gen_weight:PopIndex) %>%
-#                         group_by(SiteID, Year, Gen, metric) %>%
-#                         summarise(error = value[1] - value[2], # truth - estimate
-#                                   truth = value[1],
-#                                   value = value[2])
-#                       
-#                       # # gen_weight plot
-#                       # test <- allscore %>% 
-#                       #   filter(metric %in% c("gen_weight", "curve_mean"), Gen == 3) %>% 
-#                       #   group_by(SiteID, Year) %>% 
-#                       #   summarise(obs = truth[2],
-#                       #             est = value[2],
-#                       #             N = error[1])
-#                       # test$est[is.na(test$est)] <- 0
-#                       # ggplot(test, aes(x = est, y = obs, color = N)) +
-#                       #   geom_point() +
-#                       #   geom_jitter()
-# 
-#                       # NAs if a generation not counted at a particulr site due to low numbers
-#                       sumscore <- allscore %>%
-#                         ungroup() %>%
-#                         dplyr::filter(complete.cases(.)) %>%
-#                         group_by(metric) %>%
-#                         summarise(bias = mean(error),
-#                                   sdtruth = sd(truth, na.rm = TRUE),
-#                                   sdvalue = sd(value, na.rm = TRUE),
-#                                   rmse = sqrt(mean(error^2)),
-#                                   mae = mean(abs(error)),
-#                                   pv = PropVariation(value),
-#                                   cv = sd(value, na.rm = TRUE) / mean(value, na.rm = TRUE),
-#                                   avg = mean(value, na.rm = TRUE),
-#                                   corr = cor(truth, value, method = "spearman", use = "na.or.complete")) %>%
-#                         ungroup() %>%
-#                         mutate(Gen = "ALL")
-#                       
-#                       # regression of predicted to truth
-#                       regscore <- allscore %>%
-#                         ungroup() %>%
-#                         dplyr::filter(complete.cases(.)) %>%
-#                         # filter(metric == "curve_mean", Gen == 1)
-#                         group_by(metric, Gen) %>%
-#                         do(broom::tidy(lm(.$truth ~ .$value + offset(1 * .$value)))) %>% 
-#                         filter(term == ".$value") %>% 
-#                         dplyr::select(-term)
-#                       
-#                       
-#                       # ggplot(regscore, aes(x = value, y = truth)) +
-#                       #   geom_point() + 
-#                       #   geom_smooth(method = "lm") +
-#                       #   geom_abline(slope = 1, intercept = 0) +
-#                       #   facet_wrap(metric ~ Gen, scales = "free")
-# 
-#                       genscore <- allscore %>%
-#                         ungroup() %>%
-#                         filter(complete.cases(.)) %>%
-#                         group_by(Gen, metric) %>%
-#                         summarise(bias = mean(error),
-#                                   sdtruth = sd(truth, na.rm = TRUE),
-#                                   sdvalue = sd(value, na.rm = TRUE),
-#                                   rmse = sqrt(mean(error^2)),
-#                                   mae = mean(abs(error)),
-#                                   pv = PropVariation(value),
-#                                   cv = sd(value, na.rm = TRUE) / mean(value, na.rm = TRUE),
-#                                   avg = mean(value, na.rm = TRUE),
-#                                   corr = cor(truth, value, method = "spearman", use = "na.or.complete")) %>%
-#                         ungroup() %>%
-#                         left_join(regscore) %>% 
-#                         mutate(Gen = as.character(Gen)) %>% 
-#                         bind_rows(sumscore)
-#                       
-#                       score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(genscore)),], genscore)
-#                       tmp[[8]] <- score
-# 
-#                       # complete combos of data for last generations missing
-#                       relpop <- alldat %>%
-#                         tidyr::complete(SiteID, Year, Gen, Data, fill = list(PopIndex = 0)) %>%
-#                         group_by(Gen) %>%
-#                         arrange(SiteID, Year) %>%
-#                         summarise(corrpop = cor(PopIndex[Data == "truth"], PopIndex[Data == "estimate"],
-#                                                 method = "spearman", use = "na.or.complete"))
-#                       popscore <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(relpop)),], relpop)
-#                       tmp[[9]] <- popscore
-# 
+                      tmp[[8]] <- ngen
 
-                      # AFTER THE ANALYSIS, decided to see if generation classification was correct
-                      # IF maxgen == ngen, like I force it to be for real count analysis
-                      # add another ngen_score to tmp file for each simulation scenario result
+                      # 2. what is error in generation weights estimated compared to simulated "truth"?
+                      # 3. what is error in phenology for each site/year compared to "truth" (quantiles/max/mean)?
+                      right_gen <- ngen %>%
+                        mutate(rightgen = maxgen) %>%
+                        ungroup() %>%
+                        dplyr::select(RegYear, rightgen)
 
-                      results <- adjcounts %>%
-                        group_by(region, modyear) %>%
-                        # mutate(weeks_obs = length(which(round(adjY) > 0)),
-                        # total_obs = sum(round(adjY))) %>%
-                        # filter(weeks_obs >= 2, total_obs >= 5) %>%
-                        do(mixmods = CompareMixMods(dat = ., param = param))
-
-                      # This df could be used to see if BIC/AIC choose right number of gen
-                      genright <- results %>%
-                        do(rightgen = RightNumGen(.$mixmods, param = param, reg = .$region, yr = .$modyear)) %>%
-                        unnest()
-
-   
-                      ngen <- genright %>%
-                        right_join(trueweight) %>%
-                        # group_by(region, modyear) %>%
-                        group_by(region, modyear, RegYear) %>%
-                        mutate(aicpick = maxgen[which(within_model_aic == 0)][1],
-                               bicpick = maxgen[which(within_model_bic == 0)][1],
-                               right_ngen = ifelse(true_weight == 0,
-                                                   ifelse(maxgen == (param$ngen - 1),
-                                                          "yes", "no"),
-                                                   ifelse(maxgen == param$ngen,
-                                                          "yes", "no"))) %>%
-                        filter(right_ngen == "yes") %>%
-                        slice(1L) %>%
-                        dplyr::select(maxgen, mixmod_flag, badmixmod:bicpick)
+                      # Do curve summaries in terms of GDD for comparison
+                      siteresults$Gen <- siteresults$gen
+                      siteresults$gen <- NULL
+                      phen_est_gdd <- siteresults %>%
+                        left_join(right_gen) %>%
+                        # dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>%
+                        filter(complete.cases(.)) %>%
+                        filter(maxgen == rightgen) %>%
+                        ungroup() %>%
+                        group_by(SiteID, Year, Gen, AccumDD) %>%
+                        summarise(Total = sum(count)) %>%
+                        group_by(SiteID, Year, Gen) %>%
+                        do(Summ_curve(t = .$AccumDD, y = .$Total)) %>%
+                        group_by(SiteID, Year) %>%
+                        mutate(gen_weight = estN / sum(estN),
+                               resultTimescale = "GDD")
                       
-                      ngen_score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(ngen)),], ngen)
-                      
-                      tmp[[10]] <- ngen_score
+                      # combining phen_est on gdd and doy scales
+                      phen_est <- siteresults %>%
+                        left_join(right_gen) %>%
+                        # dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>%
+                        filter(complete.cases(.)) %>%
+                        filter(maxgen == rightgen) %>%
+                        ungroup() %>%
+                        group_by(SiteID, Year, Gen, DOY) %>%
+                        summarise(Total = sum(count)) %>%
+                        group_by(SiteID, Year, Gen) %>%
+                        do(Summ_curve(t = .$DOY, y = .$Total)) %>%
+                        group_by(SiteID, Year) %>%
+                        mutate(gen_weight = estN / sum(estN),
+                               resultTimescale = "DOY") %>% 
+                        bind_rows(phen_est_gdd)
                       
                       
                       
-                      saveRDS(tmp, file = f)
+                      truth <- truth %>%
+                        ungroup() %>%
+                        mutate(PopIndex = gen_weight * M,
+                               Data = "truth") %>%
+                        dplyr::select(-estN, -M)
+                      # 3a. regression of random effects for site/year compared to estimated variation?
+                      # maybe not necessary/interesting...
+
+
+                      # 4. what is error in site/year population size compared to "truth" using trapezoid rule?
+                      # do population index in terms of DOY like UKBMS
+                      N_est <- siteresults %>%
+                        # dplyr::select(-c(curve_mean, curve_max, curve_q0.1, curve_q0.5, curve_q0.9, n)) %>%
+                        filter(complete.cases(.)) %>%
+                        filter(maxgen == param$ngen) %>%
+                        ungroup() %>%
+                        group_by(SiteID, Year, Gen, DOY) %>%
+                        summarise(Total = sum(count)) %>%
+                        group_by(SiteID, Year, Gen) %>%
+                        summarise(PopIndex = TrapezoidIndex(DOY, Total)) %>%
+                        right_join(phen_est) %>%
+                        group_by(Gen, resultTimescale) %>%
+                        mutate(meanmu = mean(curve_mean)) %>%
+                        group_by(SiteID, Gen, resultTimescale) %>%
+                        mutate(Site_RE = mean(curve_mean) - meanmu) %>%
+                        group_by(Year, Gen, resultTimescale) %>%
+                        mutate(Year_RE = mean(curve_mean) - meanmu,
+                               Data = "estimate") %>%
+                        dplyr::select(-estN, -meanmu) %>%
+                        ungroup() %>%
+                        mutate(Year = as.numeric(as.character(Year)))
+
+                      alldat <- bind_rows(truth, N_est)
+
+                      allscore <- alldat %>%
+                        dplyr::select(-Site_RE, -Year_RE, -Site_M, -Year_M) %>%
+                        tidyr::gather(key = "metric", value = "value", gen_weight:PopIndex, -resultTimescale) %>%
+                        group_by(SiteID, Year, Gen, metric, resultTimescale) %>%
+                        summarise(error = value[1] - value[2], # truth - estimate
+                                  truth = value[1],
+                                  value = value[2])
+                      
+                      
+
+                      # # gen_weight plot
+                      # # shows that last generation weight influenced by mixmod estimate of
+                      # # phenology in previous generation, if phenology too early, gen_weight too big
+                      # test <- allscore %>%
+                      #   filter(metric %in% c("gen_weight", "curve_mean"), Gen == 2,
+                      #          resultTimescale == "GDD") %>%
+                      #   group_by(SiteID, Year) %>%
+                      #   summarise(obs = truth[2],
+                      #             est = value[2],
+                      #             N = error[1])
+                      # test$est[is.na(test$est)] <- 0
+                      # ggplot(test, aes(x = est, y = obs, color = N)) +
+                      #   geom_point() +
+                      #   geom_jitter()
+
+                      # Grouping all generations together for scoring doesn't make sense
+                      # NAs if a generation not counted at a particulr site due to low numbers
+                      # sumscore <- allscore %>%
+                      #   ungroup() %>%
+                      #   dplyr::filter(complete.cases(.)) %>%
+                      #   group_by(metric, resultTimescale) %>%
+                      #   summarise(bias = mean(error),
+                      #             sdtruth = sd(truth, na.rm = TRUE),
+                      #             sdvalue = sd(value, na.rm = TRUE),
+                      #             rmse = sqrt(mean(error^2)),
+                      #             mae = mean(abs(error)),
+                      #             pv = PropVariation(value),
+                      #             cv = sd(value, na.rm = TRUE) / mean(value, na.rm = TRUE),
+                      #             avg = mean(value, na.rm = TRUE),
+                      #             corr = cor(truth, value, method = "pearson", use = "na.or.complete")) %>%
+                      #   ungroup() %>%
+                      #   mutate(Gen = "ALL")
+
+                      # # regression of predicted to truth
+                      # # offset in lm tests for slopes different than 1
+                      # regscore <- allscore %>%
+                      #   ungroup() %>%
+                      #   dplyr::filter(complete.cases(.)) %>%
+                      #   # filter(metric == "curve_mean", Gen == 1)
+                      #   group_by(metric, Gen, resultTimescale) %>%
+                      #   do(broom::tidy(lm(.$truth ~ .$value + offset(1 * .$value)))) %>%
+                      #   filter(term == ".$value") %>%
+                      #   dplyr::select(-term)
+
+
+                      # ggplot(regscore, aes(x = value, y = truth)) +
+                      #   geom_point() +
+                      #   geom_smooth(method = "lm") +
+                      #   geom_abline(slope = 1, intercept = 0) +
+                      #   facet_wrap(metric ~ Gen, scales = "free")
+
+                      genscore <- allscore %>%
+                        ungroup() %>%
+                        filter(complete.cases(.)) %>%
+                        filter(!(metric == "gen_weight" & truth == 1)) %>%  # only care about gen_weight accuracy if not 0/1
+                        group_by(Gen, metric, resultTimescale) %>%
+                        summarise(bias = mean(error),
+                                  avg = mean(truth, na.rm = TRUE),
+                                  sdtruth = sd(truth, na.rm = TRUE),
+                                  sdvalue = sd(value, na.rm = TRUE),
+                                  rmse = sqrt(mean(error^2)),
+                                  mae = mean(abs(error)),
+                                  pv = PropVariation(value),
+                                  cv = sd(value, na.rm = TRUE) / mean(value, na.rm = TRUE),
+                                  corr = cor(truth, value, method = "pearson", use = "na.or.complete"),
+                                  rsq = 1 - (sum((error ^ 2), na.rm = TRUE) / sum(((truth - avg) ^ 2), na.rm = TRUE)))
+                        # ungroup() %>%
+                        # left_join(regscore)
+
+                      # score <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(genscore)),], genscore)
+                      tmp[[9]] <- genscore
+
+                      # # complete combos of data for last generations missing
+                      # # not important unless I reassign some years to have 0 last generation
+                      # 
+                      # relpop <- alldat %>%
+                      #   tidyr::complete(SiteID, Year, Gen, resultTimescale, Data, fill = list(PopIndex = 0)) %>%
+                      #   group_by(Gen, resultTimescale) %>%
+                      #   arrange(SiteID, Year) %>%
+                      #   summarise(corrpop = cor(PopIndex[Data == "truth"], PopIndex[Data == "estimate"],
+                      #                           method = "pearson", use = "na.or.complete"))
+                      # popscore <- bind_cols(param[rep(seq_len(nrow(param)), each=nrow(relpop)),], relpop)
+                      # tmp[[10]] <- popscore
+                      
+                      outlist <- list(tmp[[1]], tmp[[4]], tmp[[5]], tmp[[6]], tmp[[8]], tmp[[9]])
+                      saveRDS(object = outlist, file = paste("popest", param$index, sep = "_"))
+                      
+                      # saveRDS(tmp, file = f)
                       
                     }
+
+
+fs <- list.files(pattern = "popest_", recursive = TRUE, full.names = TRUE)
+fs_index <- stringr::str_split_fixed(string = fs, pattern = "_", n = 3)[, 3]
+
+# errors, just ignored because only 3
+test <- params[-which(params$index %in% fs_index), ]
 
 
 # unsure why this was deleted, found in github
 system.time({
   genscore <- vector("list", length(fs))
-  # siteyrscore <- vector("list", length(fs))
-  # relpopscore <- vector("list", length(fs))
-  genscore_constrain <- vector("list", length(fs))
+  siteyrscore <- vector("list", length(fs))
+  simparam <- vector("list", length(fs))
   
   for (i in 1:length(fs)){
       f <- fs[i]
       tmp <- readRDS(f)
-      genscore[[i]] <- tmp[[7]]
-      # siteyrscore[[i]] <- tmp[[8]]
-      # relpopscore[[i]] <- tmp[[9]]
-      genscore_constrain[[i]] <- tmp[[10]]
+      genscore[[i]] <- tmp[[5]] %>% mutate(index = tmp[[1]]$index)
+      siteyrscore[[i]] <- tmp[[6]] %>% mutate(index = tmp[[1]]$index)
+      simparam[[i]] <- tmp[[1]] %>% 
+        left_join(surv_effort) %>% 
+        left_join(virtsp)
     }
   gendf <- bind_rows(genscore)
-  # phendf <- bind_rows(siteyrscore)
-  # popdf <- bind_rows(relpopscore)
-  gendf_constrain <- bind_rows(genscore_constrain)
+  phendf <- bind_rows(siteyrscore)
+  paramdf <- bind_rows(simparam)
   })
 saveRDS(gendf, "gendf.rds")
-# saveRDS(phendf, "phendf.rds")
-# saveRDS(popdf, "popdf.rds")
-saveRDS(gendf_constrain, "gendf_constrain.rds")
+saveRDS(phendf, "phendf.rds")
+saveRDS(paramdf, "paramdf.rds")
+
+# new things to keep in mind
+# mod_maxgen, when == ngen doesn't really matter for univoltine species for classification score
+# phendf is conditional on the right voltinism being selected ()
+
 
 
 
 # scoring results
 gendf <- readRDS("gendf.rds")
 phendf <- readRDS("phendf.rds")
-popdf <- readRDS("popdf.rds")
-gendf_constrain <- readRDS("gendf_constrain.rds")
+paramdf <- readRDS("paramdf.rds")
 
 # 1. Model pathologies
 # Mixmod errors, GAM errors, SD of mixmod really small
@@ -652,7 +652,7 @@ test <- gendf %>%
   summarise(badmixmod = max(badmixmod),
             redundant = min(redundant, na.rm = TRUE),
             nearzerosigma = min(nearzerosigma)) %>% 
-  left_join(params) %>% 
+  left_join(paramdf) %>% 
   mutate(redundant = ifelse(redundant == Inf, NA, redundant))
 
 # this shows that mixture models failed to fit when group_struct == year & mod_region == reg4 & mixmod == skew
@@ -677,12 +677,14 @@ ggplot(test %>% filter(gam_scale == "DOY"), aes(x = sqrt(nearzerosigma), y = red
 
 
 df <- gendf %>% 
+  left_join(paramdf) %>% 
   filter(group_struct == "year") %>%
   filter(mod_region == "reg4") %>%
   mutate(mismatch = bicpick - maxgen)
 
 # versus
 df <- gendf %>% 
+  left_join(paramdf) %>% 
   filter(group_struct == "year") %>%
   filter(mod_region == "reg4") %>%
   group_by(index) %>% 
@@ -690,9 +692,7 @@ df <- gendf %>%
          maxgen = max(maxgen),
          mismatch = bicpick - maxgen)
 
-df <- gendf_constrain %>% 
-  filter(group_struct == "year") %>%
-  filter(mod_region == "reg4")
+
 # 
 # mod <- lm(mismatch ~ (true_weight + ngen + region)^2, data = df)
 # summary(mod)
@@ -774,27 +774,31 @@ df <- df %>%
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1
-true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5"))
-pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5", "6"))
+pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5", "6"))
 cfmat <- caret::confusionMatrix(pred, true)
 cfmat
 
 # scores of parameter sets, one at a time
 # could use confusion matrix accuracy CI for significant differences
 
+gendf <- gendf %>% filter(maxgen > 1)
+
 outlist <- list()
 groupset <- expand.grid(group_struct, mod_region)
 names(groupset) <- c("group_struct", "mod_region")
 for (j in 1:nrow(groupset)){
-  df <- gendf_constrain %>% 
+  df <- gendf %>% 
+    ungroup() %>% 
+    left_join(paramdf) %>% 
     filter(group_struct == groupset[j, 1],
            mod_region == groupset[j, 2])
-  for(i in names(params)[c(4, 6:8, 11, 12, 15, 18)]){
+  for(i in names(paramdf)[c(23, 24, 26, 3, 5, 6, 16, 18)]){
     p <- pull(.data = df, var = i)
     # mixmod accuracy
     tmpdf <- df %>% 
-      mutate(true = factor(maxgen, levels = c("1", "2", "3", "4", "5")),
-             pred = factor(bicpick, levels = c("1", "2", "3", "4", "5")),
+      mutate(true = factor(maxgen, levels = c("1", "2", "3", "4", "5", "6")),
+             pred = factor(bicpick, levels = c("1", "2", "3", "4", "5", "6")),
              varsplit = i,
              varfact = as.factor(as.character(p))) %>% 
       group_by(varsplit, varfact) %>% 
@@ -823,22 +827,24 @@ for (j in 1:nrow(groupset)){
 
 generr <- bind_rows(outlist)
 generr$varsplit <- factor(generr$varsplit, 
-                          levels = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
-                                     "gam_scale", "gam_smooth", "mixmod"))
+                          levels = c("ngen", "emerg_dd", "death_rate", "surv_missing",
+                                     "gam_scale", "gam_smooth", "mixmod", "mod_maxgen"))
 generr$varsplit <- plyr::mapvalues(generr$varsplit, 
-                                   from = c("ngen", "death_rate", "detprob_b0", "surv_missing", "detprob_model",
-                                            "gam_scale", "gam_smooth", "mixmod"),
-                                   to = c("# Generations", "Death rate", "Detection Probability", "Missing surveys", "Detection Modeling",
-                                          "GAM timescale", "Use of GAM predictions", "Mixture model distribution"))
+                                   from = c("ngen", "emerg_dd", "death_rate", "surv_missing",
+                                            "gam_scale", "gam_smooth", "mixmod", "mod_maxgen"),
+                                   to = c("# Generations", "Emergence DD", "Death rate", "Missing surveys",
+                                          "GAM timescale", "Use of GAM predictions", "Mixture model distribution", "Mixture modes"))
 generr$varfact <- factor(generr$varfact,
                          levels = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
-                                    "1", "2", "3", "4", "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew"))
+                                    "1", "2", "3", "4", "5", "0.005", "0.0075", "hom", "het", "skew", "ngen", "plus1",
+                                    "200", "400", "600", "800", "1000", "1600", "2200"))
 generr$varfact <- plyr::mapvalues(generr$varfact, 
                                    from = c("none", "0", "0.2", "0.4", "DOY", "GDD", "interpolate", "preds_8day", "preds_4day",
-                                            "0.005", "0.0075", "-9", "-7", "covariate", "known", "hom", "het", "skew"),
+                                            "0.005", "0.0075", "hom", "het", "skew", "ngen", "plus1"),
                                    to = c("None", "0", "20%", "40%", "Day of year", "Degree-day", "Missing", 
-                                          "Replace\n8-day", "Replace\n4-day", "Low", "High", "Low", "High", 
-                                          "Covariate", "Known", "Equal\nvariance", "Unequal\nvariance", "Skew\nnormal"))
+                                          "Replace\n8-day", "Replace\n4-day", "Low", "High",  
+                                           "Equal\nvariance", "Unequal\nvariance", "Skew\nnormal",
+                                          "True #", "True # + 1"))
 
 genplt <- ggplot(generr, aes(x = varfact, y = Accuracy, group = interaction(group_struct, mod_region),
                              color = interaction(group_struct, mod_region))) +
@@ -992,21 +998,23 @@ ggsave(filename = paste("PVPhenology", "png", sep = "."),
 
 
 df <- gendf %>% 
+  left_join(paramdf) %>% 
   filter(group_struct != "year", mod_region != "reg4", surv_missing != 0.4, gam_scale == "GDD",
-         gam_smooth != "none", detprob_model != "none", mixmod == "hom")
+         gam_smooth != "none", mixmod == "hom")
 
 # confusion matrix for generations classified by mixmod
 # AIC chooses too many gen, BIC better but not great especially for ngen == 1
-true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5"))
-pred <- factor(df$bicpick, levels = c("1", "2", "3", "4", "5"))
+true <- factor(df$maxgen, levels = c("1", "2", "3", "4", "5", "6"))
+pred <- factor(df$aicpick, levels = c("1", "2", "3", "4", "5", "6"))
 cfmat <- caret::confusionMatrix(pred, true)
 cfmat
 
 
-df <- phendf %>% 
+df <- phendf %>%
+  left_join(paramdf) %>% 
   filter(group_struct != "year", mod_region != "reg4", surv_missing == 0.4,
          gam_smooth != "none", metric == "curve_mean")
-df %>% group_by(gam_smooth, detprob_model, gam_scale, mixmod) %>%
+df %>% group_by(surv_id, gam_smooth, gam_scale, mixmod, mod_maxgen) %>%
   summarise(rmse = mean(rmse),
             pv = mean(pv)) %>% 
   arrange(rmse) %>% 
@@ -1015,7 +1023,7 @@ df %>% group_by(gam_smooth, detprob_model, gam_scale, mixmod) %>%
 
 df <- popdf %>% 
   filter(group_struct != "year", mod_region != "reg4", surv_missing != 0.4, gam_scale == "GDD",
-         gam_smooth != "none", detprob_model != "none", mixmod == "hom")
+         gam_smooth != "none", mixmod == "hom")
 
 ggplot(df, aes(x = corrpop, group = Gen, color = Gen)) +
   geom_density() +

@@ -95,12 +95,18 @@ Simulate_Counts <- function(param, gdd){
   
   
   # make some years have voltinism variation
+  # originally did this by available gdd, but this makes last generations small for most years
+  # NEW: split years into 3 treatments: 0, 1, 2 multipliers of site variation
+  val <- length(years) / 3
   gddannvar <- dddat %>% 
     group_by(SiteID, Year) %>%
     summarise(maxgdd = max(AccumDD)) %>% 
     group_by(Year) %>% 
     summarise(anngdd = mean(maxgdd)) %>% 
-    mutate(zanngdd = (anngdd - min(anngdd)) / (max(anngdd) - min(anngdd)))
+    mutate(zanngdd = sample(x = rep.int(0:2, times = val), size = length(years), replace = FALSE))
+    # mutate(zanngdd = runif(length(years), .5, 2))
+    # mutate(zanngdd = (anngdd - min(anngdd)) / (max(anngdd) - min(anngdd)))
+  
   
   
   # voltinism varying by site
@@ -188,10 +194,17 @@ Simulate_Counts <- function(param, gdd){
   true_weight <- dfall %>% 
     group_by(SiteID, SiteDate) %>% 
     mutate(gen_weight = gen_weight / sum(gen_weight))
+  true_phen_gdd <- dfall %>% 
+    ungroup() %>% 
+    group_by(SiteID, Year, Gen) %>% 
+    do(Summ_curve(t = .$AccumDD, y = .$y)) %>% 
+    mutate(resultTimescale = "GDD")
   true_phen <- dfall %>% 
     ungroup() %>% 
     group_by(SiteID, Year, Gen) %>% 
-    do(Summ_curve(t = .$AccumDD, y = .$y))
+    do(Summ_curve(t = .$DOY, y = .$y)) %>% 
+    mutate(resultTimescale = "DOY") %>% 
+    bind_rows(true_phen_gdd)
   true_N <- counts %>% 
     ungroup() %>% 
     dplyr::select(SiteID, Year, Site_RE, Year_RE, Site_M, Year_M, M) %>% 
@@ -249,7 +262,8 @@ Adjust_Counts <- function(param, counts){
   
   if(param$gam_smooth == "none"){
     adjcounts$gam_flag <- 0
-    return(adjcounts)  
+    summod <- NA
+    return(list(adjcounts, summod))
   }else{
     # model GAM once for next two cases
     
@@ -298,8 +312,10 @@ Adjust_Counts <- function(param, counts){
     # }
     
     mod <- gammod$result
-    summod <- summary(gammod$result)
-
+    summod_all <- summary(gammod$result)
+    summod <- summod_all[c("residual.df", "r.sq", "n", "dev.expl", "p.table", "s.table", "sp.criterion")]
+    summod$nb_theta <- gammod$result$family$getTheta(TRUE)
+    
     # prediction with response
     adjY <- predict(gammod$result, newdata = newdata, type = "response")
     newdata$adjY <- qnbinom(.5, size = mod$family$getTheta(TRUE), mu = adjY)
@@ -330,29 +346,19 @@ Adjust_Counts <- function(param, counts){
       interps <- anti_join(newdata, adjcounts, by = c("SiteID", "SiteDate"))
       adjcounts <- bind_rows(adjcounts, interps)
       adjcounts$gam_flag <- 0
-      adjcounts$gam_devexpl <- summod$dev.expl
-      adjcounts$nb_theta <- gammod$result$family$getTheta(TRUE)
-      
-      return(adjcounts)
+      return(list(adjcounts, summod))
     }
     
     if(param$gam_smooth %in% c("preds_4day", "preds_8day")){
       adjcounts <- newdata
       adjcounts$gam_flag <- 0
-      adjcounts$gam_devexpl <- summod$dev.expl
-      adjcounts$nb_theta <- gammod$result$family$getTheta(TRUE)
-      adjcounts$
-      return(adjcounts)
-    
-      #TODO: return summod to track GAMs across all simulations
-      
-      
+      return(list(adjcounts, summod))
       }
   }else{
     # error in gam fit
     adjcounts$gam_flag <- 1
-    adjcounts$nb_disp <- NA
-    return(adjcounts)  
+    summod <- NA
+    return(list(adjcounts, summod))
   }
 }
 
@@ -421,7 +427,7 @@ CompareMixMods <- function(dat, param){
   dd_dist <- rep(dd, y)
 
   mvmin <- 1
-  mvmax <- param$ngen # tried ngen + 1 in simulation and saw overfitting
+  mvmax <- ifelse(param$mod_maxgen == "ngen", param$ngen, param$ngen + 1) # tried ngen + 1 in simulation and saw overfitting
   gens <- c(mvmin:mvmax)
   maxtry <- 5 # repeating smsn.mix function if errors
   # out <- as.list(mvmin:mvmax)
@@ -641,6 +647,22 @@ Summ_mixmod <- function(df){
   return(outdf)
 }
 
+# from http://coleoguy.blogspot.com/2016/04/stochasticprobabilistic-rounding.html
+StochRound = function(x){
+  ## extract the decimal portion
+  q <-  abs(x - trunc(x))
+  
+  ## draw a value 0 or 1 with probability
+  ## based on how close we already are
+  adj <- purrr::map_int(q, ~base::sample(0:1, size = length(.x), prob = c(1 - .x, .x)))
+  
+  ## make it negative if x is
+  adj <- ifelse(x < 0, adj * -1, adj)
+  
+  ## return our new value
+  trunc(x) + adj
+}
+
 
 
 # intending with region grouping
@@ -650,7 +672,7 @@ AssignGeneration <- function(mixmod, dat, param, reg, yr){
   dat <- dat %>%
     filter(region == reg,
            modyear == yr)
-  y <- round(dat$adjY)
+  y <- StochRound(dat$adjY)
   
   # df to be combined with generation classifications at the end
   dat$row <- 1:nrow(dat)
