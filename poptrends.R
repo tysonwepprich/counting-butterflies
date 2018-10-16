@@ -252,7 +252,8 @@ pops$rowid <- as.factor(1:nrow(pops))
 pops$specyear <- paste(pops$species, pops$Year, sep = "_")
 pops$specsite <- paste(pops$species, pops$SiteID, sep = "_")
 
-
+# I like this model, trends match previous plot of 82 trends
+# No collated index, but it does same thing of giving each species a site and year effect
 mod1 <- glmer(round(PopIndex) ~ zyear
              + (1|specyear) + (1|specsite)
              + (1 + zyear|species)
@@ -267,7 +268,7 @@ sitetrends$SiteID <- row.names(sitetrends)
 sitetrends <- sitetrends %>% left_join(siteGDD) %>% mutate(zzyear = scale(zyear))
 
 library(viridis)
-plt <- ggplot(sitetrends, aes(x = lon, y = lat, color = zzyear)) +
+plt <- ggplot(sitetrends, aes(x = lon, y = lat, color = zyear)) +
   geom_point(size = 3) +
   scale_color_viridis() +
   theme_bw()
