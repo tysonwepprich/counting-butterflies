@@ -1,5 +1,58 @@
 # population trends with GAM prediction based indices
 
+data <- readr::read_csv("data/data.trim.csv") %>% 
+  mutate(SiteID = formatC(SiteID.x, width = 3, format = "d", flag = "0"),
+         SiteDate = lubridate::ymd(SiteDate))
+data$CommonName[which(data$CommonName == "Spring/Summer Azure")] <- "Azures"
+
+# filter unidentified species
+species <- data %>% 
+  filter(CommonName %in% unique(CommonName)[1:122]) %>% 
+  group_by(CommonName) %>% 
+  summarise(n = sum(Total)) %>% 
+  arrange(n)
+
+surveys <- distinct(data[, c("SeqID", "SiteID", "SiteDate", "Week")])
+
+covdata <- data %>%
+  group_by(SeqID) %>%
+  summarise(listlength = length(which(unique(CommonName) %in% species$CommonName)),
+            temperature = mean(c(StartTemp, EndTemp), na.rm = TRUE),
+            duration = duration[1]) %>%
+  distinct()
+
+sites <- read.csv("data/OHsites_reconciled_update2016.csv") %>% 
+  mutate(SiteID = formatC(Name, width = 3, format = "d", flag = "0"))
+# gdd <- readRDS("data/dailyDD.rds")
+gdd <- readRDS("../ohiogdd/dailyDD.rds")
+
+
+gdd <- left_join(gdd, sites) %>% 
+  dplyr::select(SiteID, SiteDate, degday530, lat, lon, maxT, minT) %>% 
+  mutate(Year = year(SiteDate),
+         DOY = yday(SiteDate)) %>% 
+  group_by(SiteID, Year) %>% 
+  arrange(DOY) %>% 
+  mutate(AccumDD = cumsum(degday530))
+
+siteGDD <- gdd %>%
+  group_by(SiteID, lat, lon) %>% 
+  filter(DOY == 365) %>%
+  summarise(meanGDD = mean(AccumDD))
+sitemod <- densityMclust(siteGDD[,c(2:3)], G = 1:4, modelNames = "EEV")
+siteGDD$region <- as.character(sitemod$classification)
+# # visualize regional clusters
+# a <- ggplot(data = siteGDD, aes(x = lon, y = lat, group = region, color = region)) + geom_point()
+# a
+
+# NB: these regions are wrong, but GAM's fit with them
+siteGDD$region <- plyr::mapvalues(siteGDD$region, from = c("1", "2", "3", "4"), 
+                                  to = c("NE", "NW", "CN", "SW"))
+gdd <- gdd %>% 
+  left_join(siteGDD[, c("SiteID", "region")])
+
+
+
 fs <- list.files("OHGAMS/all", full.names = TRUE)
 # for species not using mixture models
 # still want population index using GAMs
@@ -58,9 +111,9 @@ pops$SiteID <- as.factor(as.character(pops$SiteID))
 pops$zyear <- scale(pops$Year)[,1]
 
 # a <- ggplot(pops, aes(x = Year, y = PopIndex)) +
-  # geom_point()+
-  # geom_smooth() +
-  # facet_wrap(~species, scales = "free_y")
+#   geom_point()+
+#   geom_smooth() +
+#   facet_wrap(~species, scales = "free_y")
 # a
 
 CollInd <- function(temp){
@@ -195,6 +248,30 @@ pops <- readRDS("allpops.rds")
 pops$YearFact <- as.factor(as.character(pops$Year))
 pops$SiteID <- as.factor(as.character(pops$SiteID))
 pops$zyear <- scale(pops$Year)[,1]
+pops$rowid <- as.factor(1:nrow(pops))
+pops$specyear <- paste(pops$species, pops$Year, sep = "_")
+pops$specsite <- paste(pops$species, pops$SiteID, sep = "_")
+
+
+mod1 <- glmer(round(PopIndex) ~ zyear
+             + (1|specyear) + (1|specsite)
+             + (1 + zyear|species)
+             + (1 + zyear|SiteID),
+             data = pops, family = poisson(link = "log"))
+summary(mod1)
+AIC(mod, mod1)
+
+
+sitetrends <- coef(mod1)$SiteID
+sitetrends$SiteID <- row.names(sitetrends)
+sitetrends <- sitetrends %>% left_join(siteGDD) %>% mutate(zzyear = scale(zyear))
+
+library(viridis)
+plt <- ggplot(sitetrends, aes(x = lon, y = lat, color = zzyear)) +
+  geom_point(size = 3) +
+  scale_color_viridis() +
+  theme_bw()
+plt
 
 popmod <- pops %>%  
   filter(Year != 1995) %>%
